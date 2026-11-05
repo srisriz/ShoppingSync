@@ -830,6 +830,54 @@ async function groupByJid(jid: string): Promise<GroupRow | null> {
   return (data as GroupRow | null) ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Who added the bot: shown on All groups so the super user knows who to send the magic word to
+
+type Meta = { owner?: string; ownerJid?: string; participants?: { id: string; jid?: string; lid?: string; notify?: string; name?: string }[] };
+
+/**
+ * A WhatsApp id as a phone number ("447700900123"), or null. Newer groups use anonymous
+ * "lid" ids, so the group's member list is used to find the matching phone id.
+ */
+async function phoneOf(sock: Sock, jid: string | undefined | null, meta?: Meta | null): Promise<{ number: string | null; name: string | null }> {
+  if (!jid) return { number: null, name: null };
+  const p = meta?.participants?.find((x) => x.id === jid || x.lid === jid || x.jid === jid);
+  let phoneJid = jid.endsWith("@s.whatsapp.net") ? jid : p?.jid?.endsWith("@s.whatsapp.net") ? p.jid : p?.id.endsWith("@s.whatsapp.net") ? p.id : null;
+  if (!phoneJid && jid.endsWith("@lid")) {
+    // Baileys keeps a lid -> phone map; its shape differs between versions, so look it up carefully.
+    const repo = (sock as unknown as { signalRepository?: { lidMapping?: { getPNForLID?: (lid: string) => Promise<string | null> } } }).signalRepository;
+    phoneJid = (await repo?.lidMapping?.getPNForLID?.(jid).catch(() => null)) ?? null;
+  }
+  const number = phoneJid ? idNumber(phoneJid) : null;
+  return { number: number && /^\d{6,15}$/.test(number) ? number : null, name: p?.notify || p?.name || null };
+}
+
+/** Saves who added the bot (from the "added" event) and who created the group (from its details). */
+async function recordWhoAdded(sock: Sock, groupJid: string, authorJid: string | undefined | null, meta?: Meta | null): Promise<void> {
+  try {
+    const m = meta ?? ((await sock.groupMetadata(groupJid).catch(() => null)) as Meta | null);
+    const update: Record<string, string | null> = {};
+    if (authorJid && !isBot(authorJid)) {
+      const who = await phoneOf(sock, authorJid, m);
+      if (who.number) { update.added_by_number = who.number; update.added_by_name = who.name; }
+    }
+    const creator = await phoneOf(sock, m?.ownerJid ?? m?.owner, m);
+    if (creator.number) { update.created_by_number = creator.number; update.created_by_name = creator.name; }
+    if (Object.keys(update).length === 0) return;
+    await db.from("families").update(update).eq("whatsapp_group_jid", groupJid);
+    if (update.added_by_number) console.log(`  added by +${update.added_by_number}${update.added_by_name ? ` (${update.added_by_name})` : ""}`);
+  } catch (err) {
+    console.error("  ✗ could not record who added the bot:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Fills in the WhatsApp names of whoever added the bot / created the group, once they send a message. */
+async function learnNames(g: GroupRow, senderNumber: string, name: string): Promise<void> {
+  if (!senderNumber || !name || name === "WhatsApp") return;
+  await db.from("families").update({ added_by_name: name }).eq("id", g.id).eq("added_by_number", senderNumber).is("added_by_name", null);
+  await db.from("families").update({ created_by_name: name }).eq("id", g.id).eq("created_by_number", senderNumber).is("created_by_name", null);
+}
+
 async function sendPrompt(sock: Sock, g: GroupRow): Promise<void> {
   const sent = await sock.sendMessage(g.whatsapp_group_jid!, { text: MAGIC_WORD_PROMPT });
   await db.from("families").update({ prompt_message_id: sent?.key.id ?? null, prompt_sent_at: new Date().toISOString() }).eq("id", g.id);
@@ -887,7 +935,10 @@ async function ensureGroup(jid: string, subject: string): Promise<GroupRow | nul
 /** On connect: register every group the bot is in; groups it has left are marked inactive. */
 async function syncGroups(sock: Sock): Promise<void> {
   const groups = Object.values(await sock.groupFetchAllParticipating());
-  for (const meta of groups) await ensureGroup(meta.id, meta.subject);
+  for (const meta of groups) {
+    const g = await ensureGroup(meta.id, meta.subject);
+    if (g?.status === "pending") await recordWhoAdded(sock, meta.id, (meta as { author?: string }).author, meta as Meta);
+  }
   const inGroups = new Set(groups.map((x) => x.id));
   const { data: known } = await db.from("families").select("id, name, whatsapp_group_jid")
     .in("status", ["active", "pending"]).not("whatsapp_group_jid", "is", null);
@@ -958,7 +1009,7 @@ async function handleActivation(sock: Sock, g: GroupRow, m: WAMessage, text: str
   }
 
   const senderJid = (m.key as { participantPn?: string }).participantPn ?? m.key.participant ?? "";
-  await db.from("families").update({ status: "active", activated_at: now, activated_by: senderJid }).eq("id", g.id);
+  await db.from("families").update({ status: "active", activated_at: now, activated_by: senderJid, activated_by_name: sender }).eq("id", g.id);
   cursors.set(g.id, ts);
   await db.from("sync_state").update({ message_cursor: String(ts), last_synced_at: now }).eq("family_id", g.id);
   console.log(`✓ "${g.name}" is now active`);
@@ -1023,10 +1074,13 @@ async function connect(): Promise<void> {
 
   // The bot was added to a new group: it becomes a shopping group, pending the magic word.
   sock.ev.on("groups.upsert", (groups) => {
-    for (const g of groups) enqueue(async () => { await ensureGroup(g.id, g.subject); });
+    for (const g of groups) enqueue(async () => {
+      await ensureGroup(g.id, g.subject);
+      await recordWhoAdded(sock, g.id, g.author, g as Meta);
+    });
   });
   // Added to or removed from a group while running.
-  sock.ev.on("group-participants.update", ({ id, participants, action }) => {
+  sock.ev.on("group-participants.update", ({ id, author, participants, action }) => {
     const ids = (participants as unknown[]).map((p) => (typeof p === "string" ? p : (p as { id?: string }).id ?? ""));
     if (!ids.some(isBot)) return;
     enqueue(async () => {
@@ -1036,6 +1090,7 @@ async function connect(): Promise<void> {
       } else if (action === "add") {
         const meta = await sock.groupMetadata(id).catch(() => null);
         await ensureGroup(id, meta?.subject ?? "WhatsApp group");
+        await recordWhoAdded(sock, id, author, meta as Meta | null);
       }
     });
   });
@@ -1060,6 +1115,8 @@ async function connect(): Promise<void> {
         const sender = m.pushName ?? "WhatsApp";
         if (g.status === "pending") {
           seen.add(m.key.id);
+          const senderNumber = idNumber((m.key as { participantPn?: string }).participantPn ?? m.key.participant);
+          await learnNames(g, senderNumber, sender).catch(() => undefined);
           await handleActivation(sock, g, m, text, sender, ts);   // nothing else works until the magic word
           return;
         }

@@ -16,6 +16,11 @@ type GroupRow = {
   created_at: string;
   activated_at: string | null;
   prompt_sent_at: string | null;
+  added_by_number: string | null;
+  added_by_name: string | null;
+  created_by_number: string | null;
+  created_by_name: string | null;
+  activated_by_name: string | null;
 };
 type CodeRow = { family_id: string | null; used_at: string | null; expires_at: string | null };
 
@@ -23,6 +28,13 @@ const ACTIVATION_WINDOW_MS = 24 * 3600 * 1000;
 const SETUP_LINK_TTL_MS = 48 * 3600 * 1000;
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "");
 const time = (ms: number) => new Date(ms).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+
+/** "447700900123" -> "+44 7700 900123" (UK numbers grouped; others just get a +). */
+const phone = (n: string) => (/^44\d{10}$/.test(n) ? `+44 ${n.slice(2, 6)} ${n.slice(6)}` : `+${n}`);
+const person = (name: string | null, n: string | null) => [name, n && phone(n)].filter(Boolean).join(" · ");
+
+/** A WhatsApp chat with this number, with the message typed in and ready to send. */
+const waLink = (n: string, text: string) => `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
 
 const STATUS: Record<GroupRow["status"], { label: string; cls: string }> = {
   active: { label: "Active", cls: "pill pill-ok" },
@@ -48,7 +60,7 @@ export default function AllGroupsPage() {
   const load = useCallback(async () => {
     const [g, it, sh, c] = await Promise.all([
       supabase.from("families")
-        .select("id, name, status, owner_id, console_username, created_at, activated_at, prompt_sent_at")
+        .select("id, name, status, owner_id, console_username, created_at, activated_at, prompt_sent_at, added_by_number, added_by_name, created_by_number, created_by_name, activated_by_name")
         .order("created_at"),
       supabase.from("items").select("family_id").eq("status", "needed"),
       supabase.from("shops").select("family_id"),
@@ -190,6 +202,17 @@ export default function AllGroupsPage() {
                           <div className="meta">
                             {g.status === "pending" ? `added ${day(g.created_at)}` : `${c.items} open items · ${c.shops} shops`}
                           </div>
+                          {g.added_by_number ? (
+                            <div className="meta who">Added by <strong>{person(g.added_by_name, g.added_by_number)}</strong></div>
+                          ) : g.status === "pending" ? (
+                            <div className="meta who">Added by: not known (the bot was offline when it was added)</div>
+                          ) : null}
+                          {g.created_by_number && g.created_by_number !== g.added_by_number && (
+                            <div className="meta who">Group created by {person(g.created_by_name, g.created_by_number)}</div>
+                          )}
+                          {g.status !== "pending" && g.activated_by_name && (
+                            <div className="meta who">Magic word given by {g.activated_by_name}</div>
+                          )}
                         </td>
                         <td><span className={STATUS[g.status].cls}>{STATUS[g.status].label}</span></td>
                         <td>
@@ -217,6 +240,15 @@ export default function AllGroupsPage() {
                               <div className="banner banner-ok">
                                 Magic word for <strong>{g.name}</strong>: <strong className="code">{extra.value}</strong>.
                                 Works only in this group, once. Copy it now; it won&apos;t be shown again.
+                                {(g.added_by_number ?? g.created_by_number) && (
+                                  <div style={{ marginTop: 8 }}>
+                                    <a className="button-link" target="_blank" rel="noreferrer"
+                                      href={waLink(g.added_by_number ?? g.created_by_number!,
+                                        `Your ShoppingSync magic word for "${g.name}" is ${extra.value}\n\nReply to the bot's message in the group with it. It works once, only in that group.`)}>
+                                      Send privately to {g.added_by_name ?? phone(g.added_by_number ?? g.created_by_number!)} on WhatsApp
+                                    </a>
+                                  </div>
+                                )}
                               </div>
                             )}
                             {extra?.kind === "link" && (
@@ -255,7 +287,8 @@ export default function AllGroupsPage() {
               <ol className="steps">
                 <li>Add the bot to the WhatsApp group. It asks for the magic word.</li>
                 <li>The group appears here as <strong>Waiting for magic word</strong>.</li>
-                <li>Click <strong>Create magic word</strong> on its row and share it with that group.</li>
+                <li>Check <strong>Added by</strong> is someone you expect. If not, do nothing: the bot leaves after 24 hours.</li>
+                <li>Click <strong>Create magic word</strong>, then <strong>Send privately</strong> to that person on WhatsApp.</li>
                 <li>Someone replies with it. The word only works in that group; anywhere else the bot leaves.</li>
               </ol>
             </section>

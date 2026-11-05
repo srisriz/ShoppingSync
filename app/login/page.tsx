@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, usernameToEmail } from "@/lib/supabase";
 
@@ -52,8 +53,7 @@ export default function LoginPage() {
           Use your group&apos;s login to see your group&apos;s list, or the super user login to manage every group.
         </p>
         <p className="hint">
-          New group? Add the ShoppingSync bot to your WhatsApp group and give it the magic word.
-          It will send you a private link to set up your group&apos;s console.
+          New group? <Link href="/use-me">See how to set up ShoppingSync for your WhatsApp group</Link>.
         </p>
       </form>
     </main>

@@ -127,7 +127,9 @@ and console login. Nothing is shared between groups.
 **Adding a group**
 1. Add the bot (the bot phone's number) to the WhatsApp group. It posts:
    "👋 Hi, I'm ShoppingSync. Reply to this group with your magic word." Until then it ignores the group.
-2. The group appears in **All groups** as *Waiting for magic word*. Click **Create magic word** on its row.
+2. The group appears in **All groups** as *Waiting for magic word*, with **Added by** (the WhatsApp name and
+   number of whoever added the bot) so you know who is asking. Click **Create magic word** on its row, then
+   **Send privately** to open a WhatsApp chat with that person with the word already typed in.
    The word works only in that group, once, within the group's 24 hours. Only its hash is stored.
 3. Someone in the group replies with it. Correct: the group is switched on, and the bot privately messages
    that person a one-time link (48 hours) to create the group's console login. Wrong (including a word made
@@ -138,7 +140,10 @@ and console login. Nothing is shared between groups.
 **Setup, once**
 1. Run `supabase/migrations/0004_groups.sql`, then `supabase/migrations/0005_super_user.sql`, in the SQL Editor.
 2. `npm run superuser:create` and choose the super user's username (default `admin`) and password.
-3. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
+3. Run `supabase/migrations/0006_added_by.sql` (who added the bot).
+4. Optional: set `NEXT_PUBLIC_BOT_NUMBER` (the bot's number, e.g. `447700900123`) in Vercel, so the
+   **Use me** page (`/use-me`) shows it. Share that page with anyone setting up a new group.
+5. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
    while testing (`http://192.168.x.x:3000`, shown as "Network" when `npm run dev` starts), or the Vercel URL.
 
 ## Needs review and the local AI
