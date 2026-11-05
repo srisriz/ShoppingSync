@@ -1,14 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { lookupInvite, type InviteView } from "@/lib/invites.server";
+import { prettyPhone, waLink } from "@/lib/phone";
+
+export const dynamic = "force-dynamic";   // every visit checks the invite afresh
 
 export const metadata: Metadata = {
   title: "Use me · ShoppingSync",
   description: "What ShoppingSync is, and how to set it up for your own WhatsApp group.",
+  referrer: "no-referrer",                // never pass the invite link on to other sites
 };
-
-/** The bot's WhatsApp number, digits with country code (set NEXT_PUBLIC_BOT_NUMBER in Vercel). */
-const BOT = (process.env.NEXT_PUBLIC_BOT_NUMBER ?? "").replace(/\D/g, "");
-const botPretty = BOT && (/^44\d{10}$/.test(BOT) ? `+44 ${BOT.slice(2, 6)} ${BOT.slice(6)}` : `+${BOT}`);
 
 const SAY: [string, string][] = [
   ["milk", "Adds milk to the list, under the right shop."],
@@ -28,12 +29,18 @@ const SAY: [string, string][] = [
   ["help · summary", "What the bot can do · what happened on the list today."],
 ];
 
-export default function UseMePage() {
+const until = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+
+export default async function UseMePage({ searchParams }: { searchParams: Promise<{ invite?: string }> }) {
+  const { invite } = await searchParams;
+  const view = await lookupInvite(invite, { markOpened: true });
+  const ok = view.state === "ok" ? view : null;
+
   return (
     <main className="guide">
       <header className="guide-hero">
-        <p className="guide-kicker">ShoppingSync</p>
-        <h1>Your family&apos;s shopping list, kept in your WhatsApp group.</h1>
+        <p className="guide-kicker">ShoppingSync{ok ? " · Your invite" : ""}</p>
+        <h1>{ok ? `Hi ${ok.name}, your family's shopping list is a few minutes away.` : "Your family's shopping list, kept in your WhatsApp group."}</h1>
         <p className="guide-lede">
           Anyone in the group types what&apos;s needed, in their own words. ShoppingSync sorts it by shop,
           keeps one tidy list, and ticks things off as you buy them. No new app to install.
@@ -46,6 +53,8 @@ export default function UseMePage() {
         </div>
       </header>
 
+      <InviteCard view={view} invite={invite} />
+
       <section className="guide-section">
         <h2>What it does</h2>
         <ul className="guide-points">
@@ -57,58 +66,53 @@ export default function UseMePage() {
         </ul>
       </section>
 
-      <section className="guide-section">
-        <h2>Before you start</h2>
-        <ul className="guide-need">
-          <li>
-            <strong>The bot&apos;s number</strong>
-            {BOT
-              ? <> <a href={`https://wa.me/${BOT}`} target="_blank" rel="noreferrer">{botPretty}</a>. Save it as a contact called <em>ShoppingSync</em>.</>
-              : <> Ask the person who sent you this page, and save it as a contact called <em>ShoppingSync</em>.</>}
-          </li>
-          <li><strong>A WhatsApp group</strong> for your family. A new one, or one you already have.</li>
-          <li><strong>A magic word</strong> from the person who sent you this page. You&apos;ll ask for it in step 3.</li>
-          <li><strong>About 10 minutes.</strong></li>
-        </ul>
-      </section>
-
-      <section className="guide-section">
-        <h2>Set up your group</h2>
-        <ol className="guide-steps">
-          <li>
-            <h3>Add the bot to your group</h3>
-            <p>Open the group, tap its name, then <em>Add members</em> and choose <em>ShoppingSync</em>. You need to be a group admin to add people.</p>
-          </li>
-          <li>
-            <h3>Wait for its hello</h3>
-            <p>The bot posts: <q>Hi, I&apos;m ShoppingSync. Reply to this group with your magic word.</q> <strong>Don&apos;t guess.</strong> A wrong word makes the bot leave straight away.</p>
-          </li>
-          <li>
-            <h3>Ask for your magic word</h3>
-            <p>Message the person who sent you this page and tell them your group&apos;s name. They can see that you added the bot, and will send you a word like <code>MANGO-4821</code> privately.</p>
-          </li>
-          <li>
-            <h3>Reply in the group with the word</h3>
-            <p>Reply to the bot&apos;s hello with the magic word, within 24 hours. It works once, and only in your group. The bot says ✅ when it&apos;s accepted.</p>
-          </li>
-          <li>
-            <h3>Open your private setup link</h3>
-            <p>The bot sends <em>you</em> a private message with a one-time link. Open it and choose a <strong>username and password</strong> for your group&apos;s web page. The link works once and expires after 48 hours.</p>
-          </li>
-          <li>
-            <h3>Add your shops</h3>
-            <p>On the web page, open <em>Group settings</em>. Add the shops you use, each with a few example items (Tesco: milk, bread, eggs). Example items let the bot sort things instantly from day one.</p>
-          </li>
-          <li>
-            <h3>Add your family</h3>
-            <p>Still in <em>Group settings</em>, add each person&apos;s name as WhatsApp shows it. Add any family words too, like <em>paal = milk</em>.</p>
-          </li>
-          <li>
-            <h3>Try it</h3>
-            <p>Send <code>milk</code> in the group, then <code>list</code>. The bot replies, and milk appears on your web page.</p>
-          </li>
-        </ol>
-      </section>
+      {ok && (
+        <section className="guide-section">
+          <h2>Set up your group</h2>
+          <ol className="guide-steps">
+            <li>
+              <h3>Save the bot&apos;s number</h3>
+              {ok.botNumber ? (
+                <>
+                  <p>The bot is <strong>{prettyPhone(ok.botNumber)}</strong>. Save it as a contact called <em>ShoppingSync</em>.</p>
+                  <div className="guide-actions">
+                    <a className="button-link" href={`/use-me/contact?invite=${invite}`}>Save contact</a>
+                    <a className="button-ghost" href={waLink(ok.botNumber)} target="_blank" rel="noreferrer">Open in WhatsApp</a>
+                  </div>
+                </>
+              ) : (
+                <p>The bot&apos;s number isn&apos;t available right now. Ask the person who invited you for it.</p>
+              )}
+            </li>
+            <li>
+              <h3>Add it to your family group, from your own phone</h3>
+              <p>
+                Open the group, tap its name, then <em>Add members</em> and choose <em>ShoppingSync</em>.
+                Add it from <strong>{prettyPhone(ok.number)}</strong>: that&apos;s the number you were invited on, and how the bot knows it&apos;s you.
+              </p>
+            </li>
+            <li>
+              <h3>It switches itself on</h3>
+              <p>Because you were invited, there&apos;s <strong>no magic word</strong>. The bot says hello in the group and privately sends <em>you</em> a one-time setup link.</p>
+            </li>
+            <li>
+              <h3>Choose your login</h3>
+              <p>Open the link and choose a <strong>username and password</strong> for your group&apos;s web page. The link works once and expires after 48 hours.</p>
+            </li>
+            <li>
+              <h3>Add your shops and family</h3>
+              <p>
+                On the web page, open <em>Group settings</em>. Add the shops you use, each with a few example items
+                (Tesco: milk, bread, eggs), and each person&apos;s name as WhatsApp shows it.
+              </p>
+            </li>
+            <li>
+              <h3>Try it</h3>
+              <p>Send <code>milk</code> in the group, then <code>list</code>. The bot replies, and milk appears on your web page.</p>
+            </li>
+          </ol>
+        </section>
+      )}
 
       <section className="guide-section">
         <h2>Things you can say</h2>
@@ -133,33 +137,74 @@ export default function UseMePage() {
       </section>
 
       <section className="guide-section">
-        <h2>Good to know</h2>
+        <h2>Your privacy</h2>
         <ul className="guide-points">
-          <li><strong>Your list is private.</strong> Only your group&apos;s login sees your list. Other groups can&apos;t see it.</li>
-          <li><strong>The chat isn&apos;t kept.</strong> Only the shopping list is saved, never your messages.</li>
-          <li><strong>Sometimes it naps.</strong> If you see 😴, the bot&apos;s brain is offline. Your message is parked and handled when it&apos;s back.</li>
-          <li><strong>It asks when unsure.</strong> Answer yes or no, or pick the shop on the web page under <em>Needs review</em>. It learns from every answer.</li>
-          <li><strong>To stop</strong>, remove the bot from the group. Add it back any time and ask for a new magic word.</li>
+          <li><strong>We keep your shopping list, not your chat.</strong> Ordinary chat is ignored and never saved. Shopping messages the bot needs to check with you, or park for later, are kept with your list so it can finish the job.</li>
+          <li><strong>Your list is private.</strong> Only your group&apos;s login sees it. Other groups can&apos;t.</li>
+          <li><strong>The AI runs on a private computer,</strong> not a public AI service. If you see 😴 it&apos;s offline; your message is parked and handled when it&apos;s back.</li>
+          <li><strong>You&apos;re in control.</strong> Remove the bot from the group at any time and it stops reading straight away.</li>
         </ul>
       </section>
 
-      <section className="guide-section">
-        <h2>If something goes wrong</h2>
-        <dl className="guide-faq">
-          <dt>The bot left the group</dt>
-          <dd>The magic word was wrong, or none arrived within 24 hours. Ask for a new word, add the bot again, and reply with it.</dd>
-          <dt>I didn&apos;t get the setup link</dt>
-          <dd>Check your WhatsApp chats for a message from the bot&apos;s number. If it isn&apos;t there, ask for a new setup link.</dd>
-          <dt>The bot doesn&apos;t reply</dt>
-          <dd>It may be offline for a while. Messages are picked up when it&apos;s back, so there&apos;s no need to send them again.</dd>
-          <dt>Something went to the wrong shop</dt>
-          <dd>Change the shop on the web page. The bot remembers and gets it right next time.</dd>
-        </dl>
-      </section>
+      {ok && (
+        <section className="guide-section">
+          <h2>If something goes wrong</h2>
+          <dl className="guide-faq">
+            <dt>The bot asked for a magic word</dt>
+            <dd>
+              It was added from a different number than {prettyPhone(ok.number)}. Don&apos;t guess a word. Ask the person who
+              invited you to invite the number that added it; the bot switches on by itself within a couple of minutes.
+            </dd>
+            <dt>I didn&apos;t get the setup link</dt>
+            <dd>Check your WhatsApp chats for a message from ShoppingSync. If it isn&apos;t there, ask for a new setup link.</dd>
+            <dt>The bot doesn&apos;t reply</dt>
+            <dd>It may be offline for a while. Messages are picked up when it&apos;s back, so there&apos;s no need to send them again.</dd>
+            <dt>Something went to the wrong shop</dt>
+            <dd>Change the shop on the web page. The bot remembers and gets it right next time.</dd>
+          </dl>
+        </section>
+      )}
 
       <footer className="guide-foot">
         <Link href="/login">Already set up? Sign in</Link>
       </footer>
     </main>
+  );
+}
+
+/** The personal part of the page: what to do next depends on the invite. */
+function InviteCard({ view, invite }: { view: InviteView; invite?: string }) {
+  if (view.state === "ok") {
+    return (
+      <section className="guide-invite ok">
+        <h2>You&apos;re invited</h2>
+        <p>
+          This invite is for <strong>{view.name}</strong> on <strong>{prettyPhone(view.number)}</strong> and works until{" "}
+          <strong>{until(view.expiresAt)}</strong>. Keep this link to yourself: it&apos;s how the bot recognises you.
+        </p>
+        <p className="guide-note" style={{ margin: 0 }}>Six steps below. It takes about 10 minutes.</p>
+      </section>
+    );
+  }
+  if (view.state === "used") {
+    return (
+      <section className="guide-invite">
+        <h2>You&apos;re all set up</h2>
+        <p>
+          This invite has already switched on {view.groupName ? <strong>{view.groupName}</strong> : "your group"}.{" "}
+          <Link href="/login">Sign in</Link> to see your list, or keep reading for everything you can say to the bot.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className="guide-invite">
+      <h2>{view.state === "invalid" ? "This invite link has expired" : "ShoppingSync is invite-only"}</h2>
+      <p>
+        {view.state === "invalid"
+          ? "Invite links work for 7 days and only once. Ask the person who invited you for a new one."
+          : "To set it up for your family, ask the person who shared this page for your personal invite link. It shows you the bot's number and switches your group on without any codes."}
+      </p>
+    </section>
   );
 }

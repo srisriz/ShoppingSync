@@ -124,7 +124,17 @@ and console login. Nothing is shared between groups.
   passwords and changes its own password. Only the super user sees these.
 - **Group login**: one per WhatsApp group; sees and manages that group only.
 
-**Adding a group**
+**Inviting someone (easiest)**
+1. On **All groups → Invites**, enter their name and WhatsApp number and click **Create invite**.
+2. Click **Send to … on WhatsApp**: their personal link (`/use-me?invite=…`, 7 days, once) opens the
+   **Use me** page with their name, the bot's number and a *Save contact* button. Without an invite, the
+   page explains ShoppingSync but doesn't show the bot's number.
+3. When the invited number adds the bot to a group (or created the group), the bot switches the group on
+   straight away, with no magic word, and privately sends them the setup link.
+4. Each invite shows its progress: Sent → Opened → Group on → Login set up. Cancel any unused invite.
+   The bot shares its own number with the website (stored server-side only) each time it connects.
+
+**Adding a group with a magic word**
 1. Add the bot (the bot phone's number) to the WhatsApp group. It posts:
    "👋 Hi, I'm ShoppingSync. Reply to this group with your magic word." Until then it ignores the group.
 2. The group appears in **All groups** as *Waiting for magic word*, with **Added by** (the WhatsApp name and
@@ -141,8 +151,7 @@ and console login. Nothing is shared between groups.
 1. Run `supabase/migrations/0004_groups.sql`, then `supabase/migrations/0005_super_user.sql`, in the SQL Editor.
 2. `npm run superuser:create` and choose the super user's username (default `admin`) and password.
 3. Run `supabase/migrations/0006_added_by.sql` (who added the bot).
-4. Optional: set `NEXT_PUBLIC_BOT_NUMBER` (the bot's number, e.g. `447700900123`) in Vercel, so the
-   **Use me** page (`/use-me`) shows it. Share that page with anyone setting up a new group.
+4. Run `supabase/migrations/0007_invites.sql` (personal invites).
 5. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
    while testing (`http://192.168.x.x:3000`, shown as "Network" when `npm run dev` starts), or the Vercel URL.
 

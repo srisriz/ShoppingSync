@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { signOut } from "@/lib/useFamily";
 import { generateCode, generateToken, sha256Hex } from "@/lib/codes";
+import { normalisePhone, prettyPhone, waLink } from "@/lib/phone";
 
 type GroupRow = {
   id: string;
@@ -22,6 +23,12 @@ type GroupRow = {
   created_by_name: string | null;
   activated_by_name: string | null;
 };
+type InviteRow = {
+  id: string; name: string; number: string; created_at: string; expires_at: string;
+  opened_at: string | null; cancelled_at: string | null; used_at: string | null; family_id: string | null;
+};
+const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
+
 type CodeRow = { family_id: string | null; used_at: string | null; expires_at: string | null };
 
 const ACTIVATION_WINDOW_MS = 24 * 3600 * 1000;
@@ -29,12 +36,8 @@ const SETUP_LINK_TTL_MS = 48 * 3600 * 1000;
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "");
 const time = (ms: number) => new Date(ms).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
-/** "447700900123" -> "+44 7700 900123" (UK numbers grouped; others just get a +). */
-const phone = (n: string) => (/^44\d{10}$/.test(n) ? `+44 ${n.slice(2, 6)} ${n.slice(6)}` : `+${n}`);
+const phone = prettyPhone;
 const person = (name: string | null, n: string | null) => [name, n && phone(n)].filter(Boolean).join(" · ");
-
-/** A WhatsApp chat with this number, with the message typed in and ready to send. */
-const waLink = (n: string, text: string) => `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
 
 const STATUS: Record<GroupRow["status"], { label: string; cls: string }> = {
   active: { label: "Active", cls: "pill pill-ok" },
@@ -51,6 +54,10 @@ export default function AllGroupsPage() {
   const [groups, setGroups] = useState<GroupRow[]>([]);
   const [counts, setCounts] = useState<Record<string, { items: number; shops: number }>>({});
   const [codes, setCodes] = useState<CodeRow[]>([]);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [inviteName, setInviteName] = useState("");
+  const [inviteNumber, setInviteNumber] = useState("");
+  const [newInvite, setNewInvite] = useState<{ id: string; name: string; number: string; link: string } | null>(null);
   const [shown, setShown] = useState<Record<string, { kind: "code" | "link" | "password"; value: string }>>({});
   const [error, setError] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -58,15 +65,18 @@ export default function AllGroupsPage() {
   const [saved, setSaved] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [g, it, sh, c] = await Promise.all([
+    const [g, it, sh, c, inv] = await Promise.all([
       supabase.from("families")
         .select("id, name, status, owner_id, console_username, created_at, activated_at, prompt_sent_at, added_by_number, added_by_name, created_by_number, created_by_name, activated_by_name")
         .order("created_at"),
       supabase.from("items").select("family_id").eq("status", "needed"),
       supabase.from("shops").select("family_id"),
       supabase.from("activation_codes").select("family_id, used_at, expires_at"),
+      supabase.from("invites")
+        .select("id, name, number, created_at, expires_at, opened_at, cancelled_at, used_at, family_id")
+        .order("created_at", { ascending: false }).limit(50),
     ]);
-    const firstError = [g, it, sh, c].find((x) => x.error)?.error;
+    const firstError = [g, it, sh, c, inv].find((x) => x.error)?.error;
     if (firstError) setError(firstError.message);
     const tally: Record<string, { items: number; shops: number }> = {};
     for (const r of (it.data ?? []) as { family_id: string }[]) (tally[r.family_id] ??= { items: 0, shops: 0 }).items++;
@@ -74,6 +84,7 @@ export default function AllGroupsPage() {
     setGroups((g.data as GroupRow[]) ?? []);
     setCounts(tally);
     setCodes((c.data as CodeRow[]) ?? []);
+    setInvites((inv.data as InviteRow[]) ?? []);
   }, []);
 
   useEffect(() => {
@@ -104,6 +115,39 @@ export default function AllGroupsPage() {
     });
     if (error) return setError(error.message);
     setShown({ ...shown, [g.id]: { kind: "code", value: code } });
+    load();
+  }
+
+  /** A personal invite: their link shows the bot's number, and their number skips the magic word. */
+  async function createInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const name = inviteName.trim();
+    const number = normalisePhone(inviteNumber);
+    if (!name) return setError("Who is the invite for?");
+    if (!number) return setError("Enter their WhatsApp number, e.g. 07700 900123 or +91 98400 12345.");
+    const token = generateToken();
+    const { data: auth } = await supabase.auth.getSession();
+    // A new invite for the same number replaces any earlier one that hasn't been used.
+    await supabase.from("invites").update({ cancelled_at: new Date().toISOString() })
+      .eq("number", number).is("used_at", null).is("cancelled_at", null);
+    const { data, error } = await supabase.from("invites").insert({
+      name, number, token_hash: await sha256Hex(token),
+      created_by: auth.session?.user.id ?? null,
+      expires_at: new Date(Date.now() + INVITE_TTL_MS).toISOString(),
+    }).select("id").single();
+    if (error || !data) return setError(error?.message ?? "Couldn't create the invite.");
+    setNewInvite({ id: data.id, name, number, link: `${window.location.origin}/use-me?invite=${token}` });
+    setInviteName("");
+    setInviteNumber("");
+    load();
+  }
+
+  async function cancelInvite(i: InviteRow) {
+    if (!window.confirm(`Cancel ${i.name}'s invite? Their link stops working.`)) return;
+    const { error } = await supabase.from("invites").update({ cancelled_at: new Date().toISOString() }).eq("id", i.id);
+    if (error) return setError(error.message);
+    if (newInvite?.id === i.id) setNewInvite(null);
     load();
   }
 
@@ -184,6 +228,7 @@ export default function AllGroupsPage() {
         {error && <p className="error">{error}</p>}
 
         <div className="admin-cols">
+          <div className="admin-left">
           <section className="card admin-table-card">
             <div style={{ overflowX: "auto" }}>
               <table className="admin-table">
@@ -281,9 +326,74 @@ export default function AllGroupsPage() {
             </div>
           </section>
 
+          <section className="card stack" id="invites">
+            <h2>Invites <span className="count">{invites.filter((i) => !i.cancelled_at).length}</span></h2>
+            <p className="hint" style={{ margin: 0 }}>
+              Invite someone by their WhatsApp number. Their link opens the Use me page with the bot&apos;s number, and
+              when that number adds the bot to a group, it switches on without a magic word. Links last 7 days and work once.
+            </p>
+            <form className="invite-form" onSubmit={createInvite}>
+              <div>
+                <label htmlFor="inv-name">Their name</label>
+                <input id="inv-name" value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Ramesh" />
+              </div>
+              <div>
+                <label htmlFor="inv-num">WhatsApp number</label>
+                <input id="inv-num" inputMode="tel" value={inviteNumber} onChange={(e) => setInviteNumber(e.target.value)} placeholder="07700 900123" />
+              </div>
+              <button type="submit">Create invite</button>
+            </form>
+
+            {newInvite && (
+              <div className="banner banner-ok">
+                Invite for <strong>{newInvite.name}</strong>: <code style={{ wordBreak: "break-all" }}>{newInvite.link}</code>
+                <div className="meta" style={{ margin: "6px 0 8px" }}>Shown once. Send it only to {newInvite.name}.</div>
+                <a className="button-link" target="_blank" rel="noreferrer"
+                  href={waLink(newInvite.number, `Hi ${newInvite.name}, here's your personal invite to ShoppingSync, our family shopping list bot for WhatsApp:\n${newInvite.link}\n\nIt shows you how to set it up in about 10 minutes. The link is just for you and works for 7 days.`)}>
+                  Send to {newInvite.name} on WhatsApp
+                </a>
+              </div>
+            )}
+
+            {invites.length > 0 && (
+              <ul className="items">
+                {invites.map((i) => {
+                  const fam = groups.find((x) => x.id === i.family_id);
+                  const expired = !i.used_at && Date.parse(i.expires_at) <= now;
+                  const ended = i.cancelled_at ? "Cancelled" : expired ? "Expired" : null;
+                  const stages: [string, boolean][] = [
+                    ["Sent", true],
+                    ["Opened", !!i.opened_at || !!i.used_at],
+                    ["Group on", !!i.used_at],
+                    ["Login set up", !!fam?.owner_id],
+                  ];
+                  return (
+                    <li key={i.id} className="item" style={{ gridTemplateColumns: "1fr auto" }}>
+                      <div>
+                        <div className="name">{i.name} <span className="meta" style={{ fontWeight: 400 }}>{phone(i.number)}</span></div>
+                        <div className="meta">
+                          {ended ? `${ended} · ` : ""}invited {day(i.created_at)}
+                          {fam ? ` · ${fam.name}` : !ended && !i.used_at ? ` · link works until ${day(i.expires_at)}` : ""}
+                        </div>
+                        {!ended && <div className="funnel" style={{ marginTop: 6 }}>
+                          {stages.map(([label, done]) => <span key={label} className={done ? "done" : ""}>{done ? "✓ " : ""}{label}</span>)}
+                        </div>}
+                      </div>
+                      {!ended && !i.used_at && <button className="danger" onClick={() => cancelInvite(i)}>Cancel</button>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+          </div>
+
           <aside className="admin-side">
             <section className="card stack">
               <h2>Adding a new group</h2>
+              <p className="hint" style={{ margin: 0 }}>
+                Easiest: <a href="#invites">invite them</a>. Their group switches on by itself. Otherwise:
+              </p>
               <ol className="steps">
                 <li>Add the bot to the WhatsApp group. It asks for the magic word.</li>
                 <li>The group appears here as <strong>Waiting for magic word</strong>.</li>

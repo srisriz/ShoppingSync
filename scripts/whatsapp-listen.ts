@@ -853,7 +853,7 @@ async function phoneOf(sock: Sock, jid: string | undefined | null, meta?: Meta |
 }
 
 /** Saves who added the bot (from the "added" event) and who created the group (from its details). */
-async function recordWhoAdded(sock: Sock, groupJid: string, authorJid: string | undefined | null, meta?: Meta | null): Promise<void> {
+async function recordWhoAdded(sock: Sock, groupJid: string, authorJid: string | undefined | null, meta?: Meta | null): Promise<string | null> {
   try {
     const m = meta ?? ((await sock.groupMetadata(groupJid).catch(() => null)) as Meta | null);
     const update: Record<string, string | null> = {};
@@ -863,12 +863,66 @@ async function recordWhoAdded(sock: Sock, groupJid: string, authorJid: string | 
     }
     const creator = await phoneOf(sock, m?.ownerJid ?? m?.owner, m);
     if (creator.number) { update.created_by_number = creator.number; update.created_by_name = creator.name; }
-    if (Object.keys(update).length === 0) return;
+    if (Object.keys(update).length === 0) return null;
     await db.from("families").update(update).eq("whatsapp_group_jid", groupJid);
     if (update.added_by_number) console.log(`  added by +${update.added_by_number}${update.added_by_name ? ` (${update.added_by_name})` : ""}`);
+    return update.added_by_number ?? update.created_by_number ?? null;
   } catch (err) {
     console.error("  ✗ could not record who added the bot:", err instanceof Error ? err.message : err);
+    return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Invites: someone the super user invited by number needs no magic word
+
+type InviteRow = { id: string; name: string; number: string };
+
+/** A live invite (not used, cancelled or expired) for one of these numbers. */
+async function liveInvite(numbers: (string | null | undefined)[]): Promise<InviteRow | null> {
+  const nums = [...new Set(numbers.filter((n): n is string => !!n))];
+  if (nums.length === 0) return null;
+  const { data } = await db.from("invites").select("id, name, number")
+    .in("number", nums).is("used_at", null).is("cancelled_at", null).gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false }).limit(1);
+  return (data?.[0] as InviteRow | undefined) ?? null;
+}
+
+/**
+ * A pending group added (or created) by an invited number: switch it on straight away,
+ * spend the invite, and send the setup link to the invited person. True if it did.
+ */
+async function activateIfInvited(sock: Sock, g: GroupRow): Promise<boolean> {
+  const { data: who } = await db.from("families").select("added_by_number, created_by_number").eq("id", g.id).maybeSingle();
+  const invite = await liveInvite([who?.added_by_number, who?.created_by_number]);
+  if (!invite) return false;
+  // Spend the invite first, so it can never set up two groups.
+  const { data: spent } = await db.from("invites").update({ used_at: new Date().toISOString(), family_id: g.id })
+    .eq("id", invite.id).is("used_at", null).select("id");
+  if (!spent?.length) return false;
+  console.log(`✓ "${g.name}" was added by invited ${invite.name}; no magic word needed`);
+  await switchOn(sock, g, {
+    personJid: `${invite.number}@s.whatsapp.net`,
+    personName: invite.name,
+    groupText: (dm) => `✅ Hi ${invite.name}, you were invited, so no magic word is needed. ShoppingSync is on for this group.` +
+      (dm ? " I've sent you a private link to set up this group's web page." : " Ask for a setup link for this group's web page.") +
+      ` Send "help" to see what I can do.`,
+  });
+  return true;
+}
+
+/** Pending groups whose invite was created after the bot joined: checked every few minutes. */
+async function activateInvitedGroups(): Promise<void> {
+  if (!currentSock) return;
+  const { data } = await db.from("families").select(GROUP_COLUMNS).eq("status", "pending").not("whatsapp_group_jid", "is", null);
+  for (const g of (data ?? []) as GroupRow[]) await activateIfInvited(currentSock, g);
+}
+
+/** The bot's own number, for the Use me page (shown only to people with an invite). */
+async function shareBotNumber(sock: Sock): Promise<void> {
+  const number = idNumber(sock.user?.id);
+  if (!/^\d{8,15}$/.test(number)) return;
+  await db.from("app_settings").upsert({ key: "bot_number", value: number, updated_at: new Date().toISOString() });
 }
 
 /** Fills in the WhatsApp names of whoever added the bot / created the group, once they send a message. */
@@ -891,7 +945,7 @@ async function sendPrompt(sock: Sock, g: GroupRow): Promise<void> {
  *  - re-added after leaving      -> pending again, asks again
  *  - an existing family set up before multi-group (matched by name) -> linked, stays active
  */
-async function ensureGroup(jid: string, subject: string): Promise<GroupRow | null> {
+async function ensureGroup(jid: string, subject: string, added?: { author?: string | null; meta?: Meta | null }): Promise<GroupRow | null> {
   const sock = currentSock;
   if (!sock) return null;
   let g = await groupByJid(jid);
@@ -912,14 +966,17 @@ async function ensureGroup(jid: string, subject: string): Promise<GroupRow | nul
     if (error || !created) { console.error(`✗ could not register group "${subject}": ${error?.message}`); return null; }
     g = created as GroupRow;
     console.log(`+ added to a new group "${subject}"`);
-    await sendPrompt(sock, g);
+    await recordWhoAdded(sock, jid, added?.author, added?.meta);
+    if (!(await activateIfInvited(sock, g))) await sendPrompt(sock, g);
     return groupByJid(jid);
   }
 
   if (g.status === "inactive" || g.status === "left") {
     await db.from("families").update({ status: "pending", prompt_message_id: null, prompt_sent_at: null }).eq("id", g.id);
-    console.log(`+ re-added to "${g.name}"; asking for the magic word again`);
-    await sendPrompt(sock, { ...g, status: "pending" });
+    console.log(`+ re-added to "${g.name}"`);
+    await recordWhoAdded(sock, jid, added?.author, added?.meta);
+    const again = { ...g, status: "pending" as const };
+    if (!(await activateIfInvited(sock, again))) await sendPrompt(sock, again);
     return groupByJid(jid);
   }
   if (g.status === "pending" && !g.prompt_sent_at) {
@@ -936,8 +993,8 @@ async function ensureGroup(jid: string, subject: string): Promise<GroupRow | nul
 async function syncGroups(sock: Sock): Promise<void> {
   const groups = Object.values(await sock.groupFetchAllParticipating());
   for (const meta of groups) {
-    const g = await ensureGroup(meta.id, meta.subject);
-    if (g?.status === "pending") await recordWhoAdded(sock, meta.id, (meta as { author?: string }).author, meta as Meta);
+    const g = await ensureGroup(meta.id, meta.subject, { meta: meta as Meta });
+    if (g?.status === "pending") await recordWhoAdded(sock, meta.id, null, meta as Meta);
   }
   const inGroups = new Set(groups.map((x) => x.id));
   const { data: known } = await db.from("families").select("id, name, whatsapp_group_jid")
@@ -951,6 +1008,7 @@ async function syncGroups(sock: Sock): Promise<void> {
   const { data: active } = await db.from("families").select("name").eq("status", "active").not("whatsapp_group_jid", "is", null);
   console.log(`✓ Listening to ${active?.length ?? 0} active group(s): ${(active ?? []).map((a) => `"${a.name}"`).join(", ") || "none yet"}.`);
   console.log("  Leave this window open; press Ctrl+C to stop.\n");
+  await activateInvitedGroups();
   await leaveExpiredGroups();
 }
 
@@ -1009,21 +1067,38 @@ async function handleActivation(sock: Sock, g: GroupRow, m: WAMessage, text: str
   }
 
   const senderJid = (m.key as { participantPn?: string }).participantPn ?? m.key.participant ?? "";
-  await db.from("families").update({ status: "active", activated_at: now, activated_by: senderJid, activated_by_name: sender }).eq("id", g.id);
+  await switchOn(sock, g, {
+    personJid: senderJid, personName: sender, quoted: m, ts,
+    groupText: (dm) => `✅ Magic word accepted. ShoppingSync is on for this group.` +
+      (dm ? ` ${sender}, I've sent you a private link to set up this group's console.` : " The super user can send a console setup link.") +
+      ` Send "help" to see what I can do.`,
+  });
+}
+
+/**
+ * Switches a group on (after a magic word or an invite): marks it active, starts reading
+ * from now, privately sends the person a one-time setup link, and tells the group.
+ */
+async function switchOn(sock: Sock, g: GroupRow, opts: {
+  personJid: string; personName: string; groupText: (dmSent: boolean) => string; quoted?: WAMessage; ts?: number;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const ts = opts.ts ?? Math.floor(Date.now() / 1000);
+  await db.from("families").update({ status: "active", activated_at: now, activated_by: opts.personJid, activated_by_name: opts.personName }).eq("id", g.id);
   cursors.set(g.id, ts);
   await db.from("sync_state").update({ message_cursor: String(ts), last_synced_at: now }).eq("family_id", g.id);
   console.log(`✓ "${g.name}" is now active`);
 
-  // A private, one-time link for this group's console login, sent only to whoever typed the code.
+  // A private, one-time link for this group's console login, sent only to this person.
   const token = generateToken();
   await db.from("setup_tokens").insert({
     family_id: g.id, token_hash: await sha256Hex(token),
     expires_at: new Date(Date.now() + SETUP_LINK_TTL_MS).toISOString(),
   });
   let dmSent = false;
-  if (senderJid) {
+  if (opts.personJid) {
     try {
-      await sock.sendMessage(senderJid, {
+      await sock.sendMessage(opts.personJid, {
         text: `Here's your one-time link to set up the ShoppingSync console for "${g.name}":\n${BASE_URL}/setup?t=${token}\n\nIt works once and expires in 48 hours.`,
       });
       dmSent = true;
@@ -1031,11 +1106,7 @@ async function handleActivation(sock: Sock, g: GroupRow, m: WAMessage, text: str
       console.error("    ✗ could not send the setup link privately:", err instanceof Error ? err.message : err);
     }
   }
-  await sock.sendMessage(g.whatsapp_group_jid!, {
-    text: `✅ Magic word accepted. ShoppingSync is on for this group.` +
-      (dmSent ? ` ${sender}, I've sent you a private link to set up this group's console.` : " The super user can send a console setup link.") +
-      ` Send "help" to see what I can do.`,
-  }, { quoted: m });
+  await sock.sendMessage(g.whatsapp_group_jid!, { text: opts.groupText(dmSent) }, opts.quoted ? { quoted: opts.quoted } : undefined);
 }
 
 async function connect(): Promise<void> {
@@ -1059,6 +1130,7 @@ async function connect(): Promise<void> {
     }
     if (connection === "open") {
       enqueue(() => syncGroups(sock));
+      enqueue(() => shareBotNumber(sock));
     }
     if (connection === "close") {
       const code = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
@@ -1074,10 +1146,7 @@ async function connect(): Promise<void> {
 
   // The bot was added to a new group: it becomes a shopping group, pending the magic word.
   sock.ev.on("groups.upsert", (groups) => {
-    for (const g of groups) enqueue(async () => {
-      await ensureGroup(g.id, g.subject);
-      await recordWhoAdded(sock, g.id, g.author, g as Meta);
-    });
+    for (const g of groups) enqueue(async () => { await ensureGroup(g.id, g.subject, { author: g.author, meta: g as Meta }); });
   });
   // Added to or removed from a group while running.
   sock.ev.on("group-participants.update", ({ id, author, participants, action }) => {
@@ -1089,8 +1158,7 @@ async function connect(): Promise<void> {
         console.log(`− removed from group ${id}; marked inactive (its data is kept)`);
       } else if (action === "add") {
         const meta = await sock.groupMetadata(id).catch(() => null);
-        await ensureGroup(id, meta?.subject ?? "WhatsApp group");
-        await recordWhoAdded(sock, id, author, meta as Meta | null);
+        await ensureGroup(id, meta?.subject ?? "WhatsApp group", { author, meta: meta as Meta | null });
       }
     });
   });
@@ -1117,6 +1185,7 @@ async function connect(): Promise<void> {
           seen.add(m.key.id);
           const senderNumber = idNumber((m.key as { participantPn?: string }).participantPn ?? m.key.participant);
           await learnNames(g, senderNumber, sender).catch(() => undefined);
+          if (await activateIfInvited(sock, g)) return;
           await handleActivation(sock, g, m, text, sender, ts);   // nothing else works until the magic word
           return;
         }
@@ -1375,6 +1444,8 @@ async function startAiWorker(): Promise<void> {
   enqueue(backgroundAiWork);
   // Groups that never gave the magic word: leave after 24 hours.
   setInterval(() => enqueue(leaveExpiredGroups), 10 * 60_000);
+  // Invites created after the bot joined a group: switch those groups on.
+  setInterval(() => enqueue(activateInvitedGroups), 2 * 60_000);
 }
 
 startAiWorker().then(connect).catch((err) => {
