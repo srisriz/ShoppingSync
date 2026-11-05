@@ -29,6 +29,20 @@ type InviteRow = {
 };
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 
+/** The WhatsApp message that goes with an invite link. */
+const inviteMessage = (name: string, link: string) => [
+  `Hey ${name} 👋`,
+  "",
+  "I want you to have your very own AI-powered personal shopping assistant. Go ahead: use it, abuse it, and teach it to serve you well. 🛒",
+  "",
+  "Create a WhatsApp group with everyone who helps with your daily shopping, and add it. Everyone can type what's needed (\"milk\", \"paal venum\", \"we're out of rice\"). It sorts everything by shop, sends the list when you ask, and ticks things off as you buy them.",
+  "",
+  "Here's your personal invite. It's just for you and works for 7 days:",
+  link,
+  "",
+  "Setup takes about 10 minutes. Shout if you get stuck!",
+].join("\n");
+
 type CodeRow = { family_id: string | null; used_at: string | null; expires_at: string | null };
 
 const ACTIVATION_WINDOW_MS = 24 * 3600 * 1000;
@@ -58,6 +72,25 @@ export default function AllGroupsPage() {
   const [inviteName, setInviteName] = useState("");
   const [inviteNumber, setInviteNumber] = useState("");
   const [newInvite, setNewInvite] = useState<{ id: string; name: string; number: string; link: string } | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  /** Copies text; falls back to a hidden text box where the clipboard isn't available. */
+  async function copy(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const box = document.createElement("textarea");
+      box.value = text;
+      box.style.position = "fixed";
+      box.style.opacity = "0";
+      document.body.appendChild(box);
+      box.select();
+      document.execCommand("copy");
+      box.remove();
+    }
+    setCopied(what);
+    setTimeout(() => setCopied(null), 2000);
+  }
   const [shown, setShown] = useState<Record<string, { kind: "code" | "link" | "password"; value: string }>>({});
   const [error, setError] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -138,6 +171,7 @@ export default function AllGroupsPage() {
     }).select("id").single();
     if (error || !data) return setError(error?.message ?? "Couldn't create the invite.");
     setNewInvite({ id: data.id, name, number, link: `${window.location.origin}/use-me?invite=${token}` });
+    setCopied(null);
     setInviteName("");
     setInviteNumber("");
     load();
@@ -348,10 +382,18 @@ export default function AllGroupsPage() {
               <div className="banner banner-ok">
                 Invite for <strong>{newInvite.name}</strong>: <code style={{ wordBreak: "break-all" }}>{newInvite.link}</code>
                 <div className="meta" style={{ margin: "6px 0 8px" }}>Shown once. Send it only to {newInvite.name}.</div>
-                <a className="button-link" target="_blank" rel="noreferrer"
-                  href={waLink(newInvite.number, `Hi ${newInvite.name}, here's your personal invite to ShoppingSync, our family shopping list bot for WhatsApp:\n${newInvite.link}\n\nIt shows you how to set it up in about 10 minutes. The link is just for you and works for 7 days.`)}>
+                <div className="invite-actions">
+                  <button type="button" className="secondary" onClick={() => copy(newInvite.link, "link")} aria-live="polite">
+                    {copied === "link" ? "Copied ✓" : "Copy link"}
+                  </button>
+                  <button type="button" className="secondary" onClick={() => copy(inviteMessage(newInvite.name, newInvite.link), "message")} aria-live="polite">
+                    {copied === "message" ? "Copied ✓" : "Copy message"}
+                  </button>
+                  <a className="button-link" target="_blank" rel="noreferrer"
+                  href={waLink(newInvite.number, inviteMessage(newInvite.name, newInvite.link))}>
                   Send to {newInvite.name} on WhatsApp
                 </a>
+                </div>
               </div>
             )}
 
