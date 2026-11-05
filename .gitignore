@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets: never commit
+.env.local
+.env*.local
+
+# WhatsApp login session for the local test: never commit
+.wa-session/
+.wa-lists.json
+
+.DS_Store
+.vercel
