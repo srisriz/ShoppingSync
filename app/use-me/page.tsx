@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Atkinson_Hyperlegible, Bricolage_Grotesque, Caveat } from "next/font/google";
 import { lookupInvite, type InviteView } from "@/lib/invites.server";
 import { prettyPhone, waLink } from "@/lib/phone";
+import Simulator from "../demo/Simulator";
+import "../demo/demo.css";
 import "./use-me.css";
 
 const display = Bricolage_Grotesque({ subsets: ["latin"], weight: ["500", "700", "800"], variable: "--um-display" });
@@ -12,30 +14,10 @@ const hand = Caveat({ subsets: ["latin"], weight: ["500", "700"], variable: "--u
 export const dynamic = "force-dynamic";   // every visit checks the invite afresh
 
 export const metadata: Metadata = {
-  title: "Use me · ShoppingSync",
-  description: "What ShoppingSync is, and how to set it up for your own WhatsApp group.",
+  title: "ShoppingSync: your family's shopping list in WhatsApp",
+  description: "Try ShoppingSync in a pretend family WhatsApp group, and set it up for your own.",
   referrer: "no-referrer",                // never pass the invite link on to other sites
 };
-
-/** The phrasebook: things to type in the group, and what happens. */
-const SAY: { say: string[]; does: string }[] = [
-  { say: ["milk"], does: "Adds milk to the list, under the right shop." },
-  { say: ["eggs, bread and butter"], does: "Adds several things at once." },
-  { say: ["paal venum", "doodh chahiye"], does: "Tanglish, Hinglish and other languages work too." },
-  { say: ["we're out of rice"], does: "Running out counts as “add it”." },
-  { say: ["extra milk", "2 more eggs"], does: "Adds to what's already on the list." },
-  { say: ["list"], does: "The bot replies with the whole list, grouped by shop." },
-  { say: ["got milk"], does: "Ticks one thing off." },
-  { say: ["done Tesco"], does: "Ticks off everything for that shop." },
-  { say: ["Done"], does: "Sent as a reply to the list, ticks off everything on it." },
-  { say: ["cancel eggs"], does: "Takes something off without buying it." },
-  { say: ["add shop Lidl"], does: "Adds a new shop." },
-  { say: ["eggs are better in Waitrose"], does: "Remembers where you like to buy things." },
-  { say: ["paal means milk"], does: "Teaches it your family's own words." },
-  { say: ["replace riz with rice"], does: "Fixes a misspelt item." },
-  { say: ["help"], does: "Shows what the bot can do." },
-  { say: ["summary"], does: "Shows what happened on the list today." },
-];
 
 const until = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
@@ -50,7 +32,7 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
         <div className="um-wrap">
           <nav className="um-nav">
             <span className="um-mark">ShoppingSync</span>
-            <Link href="/login">Sign in</Link>
+            <span className="um-nav-links"><a href="#try">Try it</a><Link href="/login">Sign in</Link></span>
           </nav>
 
           <div className="um-hero-grid">
@@ -61,6 +43,10 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
                 under the right shop and ticks it off when it&apos;s bought. Nothing new to install.
               </p>
               <InviteCard view={view} invite={invite} />
+              <a className="um-try-cta" href="#try">
+                <span>Try it now</span>
+                <small>A pretend family group, right on this page</small>
+              </a>
             </div>
 
             <Demo />
@@ -111,15 +97,15 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
                 </li>
                 <li>
                   <h3>It switches itself on</h3>
-                  <p>The bot says hello in the group and privately sends <em>you</em> a one-time setup link.</p>
+                  <p>The bot says hello in the group and privately sends <em>you</em> a one-time link for your group&apos;s web page.</p>
+                </li>
+                <li>
+                  <h3>Answer a few questions</h3>
+                  <p>Right there in the chat it asks which shops you use, and what you buy at each. Reply <em>yes</em> to its guesses, or say your own. <a href="#try">Try it below</a> first if you like.</p>
                 </li>
                 <li>
                   <h3>Choose your login</h3>
-                  <p>Open the link and choose a username and password for your group&apos;s web page. The link works once, for 48 hours.</p>
-                </li>
-                <li>
-                  <h3>Add your shops and family</h3>
-                  <p>In <em>Group settings</em>, add the shops you use with a few example items each (Tesco: milk, bread, eggs), and each person&apos;s name as WhatsApp shows it.</p>
+                  <p>Open the private link and choose a username and password for your group&apos;s web page. It works once, for 48 hours.</p>
                 </li>
                 <li>
                   <h3>Try it</h3>
@@ -130,17 +116,17 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
           </section>
         )}
 
-        <section className="um-section um-wrap">
-          <h2>Things you can say</h2>
-          <p className="um-sub">Type these in the group. Capitals don&apos;t matter, and full sentences work too.</p>
-          <dl className="um-phrasebook">
-            {SAY.map(({ say, does }) => (
-              <div className="um-phrase" key={say.join("|")}>
-                <dt>{say.map((s) => <span className="um-bubble" key={s}>{s}</span>)}</dt>
-                <dd>{does}</dd>
-              </div>
-            ))}
-          </dl>
+        <section className="um-section um-try" id="try">
+          <div className="um-wrap">
+            <h2>Try it in a pretend family group</h2>
+            <p className="um-sub">
+              Type as anyone in the family and watch the bot reply, sort the list by shop and learn your family&apos;s words.
+              It&apos;s the bot&apos;s real message handling, running right here. Nothing is saved.
+            </p>
+            <div className="sim">
+              <Simulator />
+            </div>
+          </div>
         </section>
 
         <section className="um-section um-wrap um-two">

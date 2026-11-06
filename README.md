@@ -181,3 +181,25 @@ git push -u origin main
 
 - Store the WhatsApp session (encrypted) in Supabase and run the same test inside a Vercel function.
 - Phase 2: message pipeline (split, rules, local Qwen worker) and tests T1–T10.
+
+## Demo page and the shared bot core
+
+`/demo` is a pretend family WhatsApp group in the browser: type as anyone in the family and the bot replies,
+sorts the list and learns, with nothing saved. It runs the same message handling as the real bot:
+`lib/bot/core.ts` holds it, and both sides plug in their own data, chat and AI (`lib/bot/ports.ts`):
+
+| | WhatsApp listener | Demo page |
+|---|---|---|
+| Data | Supabase (`scripts/bot-supabase.ts`) | memory (`lib/bot/memory.ts`) |
+| Chat | Baileys | the on-screen phone |
+| AI | Qwen in Ollama | a small built-in stand-in (`lib/sim/brain.ts`) |
+
+**The demo's AI (Qwen on Groq).** `/api/demo-ai` runs the bot's own AI tasks (same prompts as `lib/ai.ts`)
+on Groq. Set `GROQ_API_KEY` (Secret) and optionally `GROQ_MODEL` in Vercel. Without a key, or when Groq is
+busy, the demo uses its built-in stand-in. The family bot itself keeps using Qwen on the Mac.
+
+## Setup chat for new groups
+
+A newly switched-on group with no shops is asked, in WhatsApp: which shops it uses, then for each shop what
+it usually buys (offering the AI's guess: "Reply yes to use that"), and ends with a tip about family words.
+"skip" skips a question, "stop setup" ends it. Run `supabase/migrations/0008_setup_chat.sql` once.

@@ -188,3 +188,42 @@
   .um-steps li::before { width: 40px; height: 40px; font-size: 19px; }
   .um-steps h3 { padding-top: 7px; }
 }
+.um-nav-links { display: flex; gap: 18px; }
+.um-inline-link { color: var(--leaf); font-weight: 700; text-underline-offset: 3px; }
+@media (prefers-color-scheme: dark) { .um-inline-link { color: var(--turmeric); } }
+
+/* "Try it now": a call to action into the live demo */
+.um-try-cta { display: inline-flex; flex-direction: column; margin-top: 22px; padding: 12px 20px 12px 18px; border-radius: 14px;
+  background: var(--leaf); color: var(--rice) !important; text-decoration: none; box-shadow: 4px 4px 0 var(--leaf-ink); transition: transform .15s, box-shadow .15s; }
+.um-try-cta span { font-family: var(--um-display), sans-serif; font-weight: 800; font-size: 19px; letter-spacing: -0.01em; }
+.um-try-cta span::after { content: " ↓"; }
+.um-try-cta small { font-size: 14px; opacity: 0.85; }
+.um-try-cta:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--leaf-ink); }
+.um-try-cta:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--leaf-ink); }
+
+/* The live demo section */
+.um-try { margin-top: 72px; padding: 64px 0 72px; background: #e8f2eb; scroll-margin-top: 0; }
+.um-try .um-wrap { max-width: 1240px; }
+.um-try .sim { margin-top: 28px; }
+.um-try .sim .sim-panel h2, .um-try .sim h3 { font-family: var(--um-display), system-ui, sans-serif; }
+.um-try .sim, .um-try .sim button, .um-try .sim input { font-family: var(--um-body), system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { .um-try { background: #0c1611; } }
+.um-try + .um-section { padding-top: 72px; }
+
+/* Phones and small screens */
+@media (max-width: 600px) {
+  .um-wrap { padding: 0 20px; }
+  .um-hero { padding-bottom: 48px; }
+  .um-try { padding: 48px 0 56px; margin-top: 56px; }
+  .um-try-cta { width: 100%; box-sizing: border-box; }
+  .um-ticket { max-width: none; }
+  .um-two { gap: 36px; }
+}
+/* Keep wide screens from stretching lines too far */
+@media (min-width: 1400px) {
+  .um-hero h1 { max-width: 13em; }
+}
+/* The demo's own headings stay small inside the page */
+.um .sim .sim-panel h2 { font-size: 20px; line-height: 1.25; margin: 0 0 4px; letter-spacing: -0.02em; }
+.um .sim .sim-try h3 { font-size: 14px; margin: 16px 0 6px; color: var(--sim-muted); font-family: var(--um-body), sans-serif; letter-spacing: 0; }
+.um .sim .sim-shop h3 { font-size: 15px; margin: 0 0 4px; letter-spacing: 0; }

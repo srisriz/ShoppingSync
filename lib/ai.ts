@@ -14,6 +14,35 @@ export type Proposal = { isItem: boolean; shopId: string | null; confidence: num
 const OLLAMA_URL = (process.env.OLLAMA_URL ?? "http://localhost:11434").replace(/\/$/, "");
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "qwen2.5:14b";
 
+/**
+ * How a prompt reaches a model and comes back as JSON. The prompts below are the
+ * same whichever model answers: Ollama on the Mac (the family bot) or a hosted
+ * model such as Qwen on Groq (the website's demo, see lib/ai-groq.ts).
+ */
+export type JsonLlm = (req: { system: string; user: string; schema: object; temperature: number }) => Promise<unknown>;
+
+/** Ollama on this Mac: the reply is constrained to the JSON schema. */
+export const ollamaJson: JsonLlm = async ({ system, user, schema, temperature }) => {
+  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      stream: false,
+      format: schema,               // Ollama constrains the reply to this JSON shape
+      keep_alive: "10m",            // unload the model after 10 idle minutes to free memory
+      options: { temperature },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
+  const data = (await res.json()) as { message?: { content?: string } };
+  return JSON.parse(data.message?.content ?? "{}");
+};
+
 /** Is Ollama running, with the chosen model installed? */
 export async function checkOllama(): Promise<{ ok: boolean; message: string }> {
   try {
@@ -44,7 +73,7 @@ const SYSTEM_PROMPT = [
   "confidence is 0 to 1. reason is at most 12 words, plain English.",
 ].join(" ");
 
-export async function proposeShop(item: string, shops: AiShop[], past: PastChoice[], sameThings: string[][] = []): Promise<Proposal> {
+export async function proposeShop(item: string, shops: AiShop[], past: PastChoice[], sameThings: string[][] = [], llm: JsonLlm = ollamaJson): Promise<Proposal> {
   const names = shops.map((s) => s.name);
   const schema = {
     type: "object",
@@ -69,25 +98,7 @@ export async function proposeShop(item: string, shops: AiShop[], past: PastChoic
     item,
   };
 
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: schema,               // Ollama constrains the reply to this JSON shape
-      keep_alive: "10m",            // unload the model after 10 idle minutes to free memory
-      options: { temperature: 0 },
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: JSON.stringify(context) },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-
-  const data = (await res.json()) as { message?: { content?: string } };
-  const out = JSON.parse(data.message?.content ?? "{}") as { is_item?: boolean; shop?: string; confidence?: number; reason?: string };
+  const out = (await llm({ system: SYSTEM_PROMPT, user: JSON.stringify(context), schema, temperature: 0 })) as { is_item?: boolean; shop?: string; confidence?: number; reason?: string };
   const isItem = out.is_item !== false;
   const shop = shops.find((s) => s.name.toLowerCase() === String(out.shop ?? "").toLowerCase());
   return {
@@ -132,7 +143,7 @@ const EXTRACT_PROMPT = [
   "If there are no shopping actions, return empty lists. Never invent items.",
 ].join(" ");
 
-export async function extractActions(message: string): Promise<ExtractedActions> {
+export async function extractActions(message: string, llm: JsonLlm = ollamaJson): Promise<ExtractedActions> {
   const schema = {
     type: "object",
     properties: {
@@ -157,24 +168,7 @@ export async function extractActions(message: string): Promise<ExtractedActions>
     },
     required: ["add", "bought", "remove", "preferences"],
   };
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: schema,
-      keep_alive: "10m",
-      options: { temperature: 0 },
-      messages: [
-        { role: "system", content: EXTRACT_PROMPT },
-        { role: "user", content: message },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { message?: { content?: string } };
-  const out = JSON.parse(data.message?.content ?? "{}") as Partial<ExtractedActions>;
+  const out = (await llm({ system: EXTRACT_PROMPT, user: message, schema, temperature: 0 })) as Partial<ExtractedActions>;
   const clean = (x: unknown) => String(x ?? "").trim().slice(0, 60);
   return {
     add: (out.add ?? []).map((i) => ({ name: clean(i?.name), quantity: i?.quantity ? clean(i.quantity) : null })).filter((i) => i.name),
@@ -225,32 +219,20 @@ const TRANSLATE_PROMPT = [
 ].join(" ");
 
 /** Detects the message's language and returns it in English (unchanged if already English). */
-export async function toEnglish(message: string, keepWords: string[] = []): Promise<{ language: string; english: string; confidence: number }> {
+export async function toEnglish(message: string, keepWords: string[] = [], llm: JsonLlm = ollamaJson): Promise<{ language: string; english: string; confidence: number }> {
   const keep = keepWords.length
     ? ` These are the family's own words: keep them exactly as written, never translate them: ${keepWords.join(", ")}.`
     : "";
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: {
-        type: "object",
-        properties: { language: { type: "string" }, english: { type: "string" }, confidence: { type: "number" } },
-        required: ["language", "english", "confidence"],
-      },
-      keep_alive: "10m",
-      options: { temperature: 0 },
-      messages: [
-        { role: "system", content: TRANSLATE_PROMPT + keep },
-        { role: "user", content: message },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { message?: { content?: string } };
-  const out = JSON.parse(data.message?.content ?? "{}") as { language?: string; english?: string; confidence?: number };
+  const out = (await llm({
+    system: TRANSLATE_PROMPT + keep,
+    user: message,
+    schema: {
+      type: "object",
+      properties: { language: { type: "string" }, english: { type: "string" }, confidence: { type: "number" } },
+      required: ["language", "english", "confidence"],
+    },
+    temperature: 0,
+  })) as { language?: string; english?: string; confidence?: number };
   const language = String(out.language ?? "English").trim() || "English";
   const english = String(out.english ?? "").trim();
   const confidence = Math.max(0, Math.min(1, Number(out.confidence ?? 1) || 0));
@@ -310,43 +292,79 @@ export type ChatContext = {
  * A short answer for a non-shopping message, or "" when the bot should stay quiet:
  * only when the question is for the bot or the whole group AND the AI is the right source.
  */
-export async function chatReply(message: string, sender: string, ctx: ChatContext = {}, now = new Date()): Promise<string> {
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: {
-        type: "object",
-        properties: {
-          addressed_to: { type: "string", enum: ["bot", "group", "person"] },
-          ai_can_answer: { type: "boolean" },
-          reply: { type: "string" },
-        },
-        required: ["addressed_to", "ai_can_answer", "reply"],
-      },
-      keep_alive: "10m",
-      options: { temperature: 0.2 },
-      messages: [
-        { role: "system", content: CHAT_PROMPT },
-        {
-          role: "user",
-          content: JSON.stringify({
-            local_times: worldTimes(now),
-            family_members: ctx.members ?? [],
-            from: sender,
-            replies_to_or_mentions_the_bot: !!ctx.toBot,
-            message,
-          }),
-        },
-      ],
+export async function chatReply(message: string, sender: string, ctx: ChatContext = {}, now = new Date(), llm: JsonLlm = ollamaJson): Promise<string> {
+  const out = (await llm({
+    system: CHAT_PROMPT,
+    user: JSON.stringify({
+      local_times: worldTimes(now),
+      family_members: ctx.members ?? [],
+      from: sender,
+      replies_to_or_mentions_the_bot: !!ctx.toBot,
+      message,
     }),
-  });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as { message?: { content?: string } };
-  const out = JSON.parse(data.message?.content ?? "{}") as { addressed_to?: string; ai_can_answer?: boolean; reply?: string };
+    schema: {
+      type: "object",
+      properties: {
+        addressed_to: { type: "string", enum: ["bot", "group", "person"] },
+        ai_can_answer: { type: "boolean" },
+        reply: { type: "string" },
+      },
+      required: ["addressed_to", "ai_can_answer", "reply"],
+    },
+    temperature: 0.2,
+  })) as { addressed_to?: string; ai_can_answer?: boolean; reply?: string };
   const forUs = ctx.toBot || out.addressed_to === "bot" || out.addressed_to === "group";
   if (!forUs || out.ai_can_answer !== true) return "";
   return String(out.reply ?? "").trim().slice(0, 300);
+}
+
+// ---------------------------------------------------------------------------
+// Setup chat: the questions a new group is asked in WhatsApp
+
+const LIST_PROMPT = [
+  "You read one reply from a UK family's WhatsApp group to a setup question, and pull out the names it lists.",
+  "kind \"shops\": the shops or places they buy from (\"Tesco\", \"the Indian shop near us\" -> \"Indian grocer\",",
+  "\"the chemist\" -> \"Chemist\", \"Costco sometimes\" -> \"Costco\"). Use short names a family would write on a list.",
+  "kind \"items\": the things they usually buy there, as short item names (\"milk\", \"veg\", \"curry leaves\").",
+  "Keep family words and other languages exactly as written (\"paal\", \"thayir\").",
+  "Never invent names. If nothing is listed, return an empty list.",
+].join(" ");
+
+/** The shops or items listed in a setup answer ("mostly Tesco and the Indian shop near us"). */
+export async function readList(kind: "shops" | "items", message: string, llm: JsonLlm = ollamaJson): Promise<string[]> {
+  const out = (await llm({
+    system: LIST_PROMPT,
+    user: JSON.stringify({ kind, reply: message }),
+    schema: { type: "object", properties: { names: { type: "array", items: { type: "string" } } }, required: ["names"] },
+    temperature: 0,
+  })) as { names?: unknown[] };
+  return (out.names ?? []).map((x) => String(x ?? "").trim().slice(0, 40)).filter(Boolean).slice(0, 15);
+}
+
+const SHOP_GUESS_PROMPT = [
+  "A UK family has told you one of the shops they use. Guess what a family typically buys there,",
+  "so the bot can offer it as a starting point. Give 4 to 8 short item names a shopper would write",
+  "(\"milk\", \"bread\", \"paracetamol\") and 1 to 3 categories (\"dairy\", \"toiletries\").",
+  "For an Indian, Asian or other specialist grocer, think of what that cuisine's family buys there.",
+  "If the shop is unknown to you, guess from its name; confidence is 0 to 1.",
+].join(" ");
+
+/** A starting guess for a shop: "Boots" -> paracetamol, toothpaste, plasters... */
+export async function guessShopItems(shop: string, llm: JsonLlm = ollamaJson): Promise<{ examples: string[]; categories: string[]; confidence: number }> {
+  const out = (await llm({
+    system: SHOP_GUESS_PROMPT,
+    user: shop,
+    schema: {
+      type: "object",
+      properties: {
+        examples: { type: "array", items: { type: "string" } },
+        categories: { type: "array", items: { type: "string" } },
+        confidence: { type: "number" },
+      },
+      required: ["examples", "categories", "confidence"],
+    },
+    temperature: 0,
+  })) as { examples?: unknown[]; categories?: unknown[]; confidence?: number };
+  const clean = (xs: unknown[] | undefined, n: number) => (xs ?? []).map((x) => String(x ?? "").trim().toLowerCase().slice(0, 30)).filter(Boolean).slice(0, n);
+  return { examples: clean(out.examples, 8), categories: clean(out.categories, 3), confidence: Math.max(0, Math.min(1, Number(out.confidence) || 0)) };
 }
