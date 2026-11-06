@@ -9,9 +9,15 @@
  *
  * "skip" skips a question, "stop setup" ends it; "list", "help" and "summary" still
  * work meanwhile. If nobody answers for a day, the setup quietly ends.
+ *
+ * Families often ignore the question and just post shopping ("milk"). Items in an answer
+ * to "which shops?" are added to the list, and the question is asked again, once; after
+ * that, such messages are handled as ordinary messages. Each shop's items then sort
+ * anything waiting in Needs review.
  */
-import { parseMessage, parseMessageDetailed } from "../parse";
-import { normalise } from "../matching";
+import { parseMessage, parseMessageDetailed, type ParsedAction } from "../parse";
+import { buildSynonymGroups, normalise, suggestShop } from "../matching";
+import { isShopName, looksLikeItem, splitShopsAndItems } from "../lexicon";
 import { tidyShopName } from "../ai";
 import { isListRequest } from "../format";
 import { isHelpRequest, isSummaryRequest } from "../info";
@@ -39,11 +45,15 @@ export async function maybeStartOnboarding(bot: Bot): Promise<void> {
   bot.log("setup chat started: asked for the family's shops");
 }
 
+/** Adds items to the list the usual way; returns the usual "✅ Added …" summary. */
+export type AddItems = (actions: ParsedAction[], m: IncomingMessage) => Promise<{ changes: number; summary: string }>;
+
 /**
  * If a setup chat is open, treats this message as its answer and returns true.
- * Returns false when there's no open setup, or the message is a list/help/summary request.
+ * Returns false when there's no open setup, or the message should be handled as usual
+ * (a list/help/summary request, ticking things off, or shopping posted again after a nudge).
  */
-export async function handleOnboarding(bot: Bot, m: IncomingMessage): Promise<boolean> {
+export async function handleOnboarding(bot: Bot, m: IncomingMessage, addItems: AddItems): Promise<boolean> {
   const ob = await bot.store.getOnboarding();
   if (!ob || ob.step === "done") return false;
   if (bot.now().getTime() - Date.parse(ob.askedAt) > STALE_MS) {
@@ -61,9 +71,9 @@ export async function handleOnboarding(bot: Bot, m: IncomingMessage): Promise<bo
     bot.log("setup chat: stopped by the family");
     return true;
   }
+  if (ob.step === "shops") return answerShops(bot, ob, m, addItems);
   bot.log(`setup chat: answer to the ${ob.step} question`);
-  if (ob.step === "shops") await answerShops(bot, ob, m);
-  else if (ob.step === "items") await answerItems(bot, ob, m);
+  if (ob.step === "items") await answerItems(bot, ob, m);
   else await answerWords(bot, ob, m);
   return true;
 }
@@ -93,15 +103,82 @@ async function readNames(bot: Bot, kind: "shops" | "items", text: string): Promi
   return names;
 }
 
-async function answerShops(bot: Bot, ob: Onboarding, m: IncomingMessage): Promise<void> {
-  if (SKIP.test(m.text.trim())) return finishShopsSkipped(bot, ob, m);
-  const said = [...new Set((await readNames(bot, "shops", m.text)).map(tidyShopName).filter(Boolean))];
-  if (said.length === 0) {
-    await bot.pause(600, 1200);
-    await bot.chat.send("I didn't catch any shop names. Which shops do you usually buy from? For example: *Tesco, Lidl, Indian grocer*.", m);
-    await bot.store.setOnboarding({ ...ob, askedAt: bot.now().toISOString() });
-    return;
+/** What the list already knows, so "milk" or "paal" is recognised as an item. */
+async function knownItems(bot: Bot) {
+  const [shops, rules, pairs] = await Promise.all([bot.store.shops(), bot.store.rules(), bot.store.synonymPairs()]);
+  return { names: [...shops.flatMap((s) => s.example_items), ...rules.map((r) => r.item_name)], groups: buildSynonymGroups(pairs) };
+}
+
+/** A reply to "Which shops do you usually buy from?": shops, plus any items posted instead. */
+async function readShopsReply(bot: Bot, text: string): Promise<{ shops: string[]; items: ParsedAction[] } | null> {
+  const known = await knownItems(bot);
+  const reading = parseMessageDetailed(text);
+  if (!reading.needsAi) {
+    // Ticking off or removing things isn't an answer to "which shops?"
+    if (reading.actions.some((a) => a.kind !== "add")) return null;
+    const split = splitShopsAndItems(reading.actions.map((a) => a.name), known.names, known.groups);
+    bot.log(`rules read: shops ${split.shops.join(", ") || "none"}; items ${split.items.join(", ") || "none"}`);
+    return { shops: split.shops, items: reading.actions.filter((a) => split.items.includes(a.name)) };
   }
+  if (bot.state.aiReady) {
+    try {
+      const r = await bot.ai.readShopAnswer(text);
+      // A "shop" that is plainly an item ("milk") is an item, whatever the AI said.
+      const shops = r.shops.filter((n) => isShopName(n) || !looksLikeItem(n, known.names, known.groups));
+      const items = [...r.items, ...r.shops.filter((n) => !shops.includes(n))];
+      bot.log(`AI read: shops ${shops.join(", ") || "none"}; items ${items.join(", ") || "none"}`);
+      // Tidy each item the usual way ("we need paal" -> "paal", "2 loaves of bread" -> bread, 2 loaves).
+      return { shops, items: items.flatMap((name) => parseMessage(name).filter((x) => x.kind === "add")) };
+    } catch (err) {
+      bot.state.aiReady = false;
+      bot.log(`AI unavailable: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  const names = parseMessage(text.replace(/\b(?:we|usually|mostly|normally|go to|shop at|buy from|sometimes|and also|also|need|needs)\b/gi, ",")).map((a) => a.name);
+  const split = splitShopsAndItems(names, known.names, known.groups);
+  bot.log(`rules read (AI off): shops ${split.shops.join(", ") || "none"}; items ${split.items.join(", ") || "none"}`);
+  return { shops: split.shops, items: split.items.map((name) => ({ kind: "add" as const, name, quantity: null })) };
+}
+
+const SHOPS_QUESTION = "which shops do you usually buy from? For example: *Tesco, Lidl, Indian grocer*.";
+
+async function answerShops(bot: Bot, ob: Onboarding, m: IncomingMessage, addItems: AddItems): Promise<boolean> {
+  if (SKIP.test(m.text.trim())) {
+    bot.log("setup chat: shops question skipped");
+    await finishShopsSkipped(bot, ob, m);
+    return true;
+  }
+  const reply = await readShopsReply(bot, m.text);
+  if (!reply) {
+    bot.log("setup chat: not an answer to the shops question; handled as usual");
+    return false;
+  }
+  const said = [...new Set(reply.shops.map(tidyShopName).filter(Boolean))];
+
+  if (said.length === 0) {
+    // No shops: most likely shopping posted instead ("milk"). Add it, and ask again, once.
+    if (ob.nudged) {
+      bot.log("setup chat: still no shops; already asked again once, so handled as usual");
+      return false;
+    }
+    let before = "";
+    if (reply.items.length) {
+      const added = await addItems(reply.items, m);
+      before = added.summary;
+    }
+    await bot.store.setOnboarding({ ...ob, nudged: true, askedAt: bot.now().toISOString() });
+    await bot.pause(600, 1200);
+    await bot.chat.send(
+      before
+        ? `${before}\n\nBefore I can sort things by shop: ${SHOPS_QUESTION}`
+        : `I didn't catch any shop names. Which ${SHOPS_QUESTION.slice(6)}`,
+      m,
+    );
+    bot.log(reply.items.length ? "setup chat: added the items, asked for shops again" : "setup chat: no shops found, asked again");
+    return true;
+  }
+
+  bot.log("setup chat: answer to the shops question");
   const existing = await bot.store.shops();
   const shops: BotShop[] = [];
   const already: string[] = [];
@@ -113,9 +190,16 @@ async function answerShops(bot: Bot, ob: Onboarding, m: IncomingMessage): Promis
     const shop = await bot.store.addShop({ name, example_items: [], priority });
     if (shop) { shops.push(shop); bot.log(`+ shop ${shop.name}`); }
   }
+  // "Tesco, and we need milk": the shop is set up and the milk goes on the list.
+  let alsoAdded = "";
+  if (reply.items.length) {
+    await addItems(reply.items, m);
+    alsoAdded = ` Also added ${andList(reply.items.map((a) => a.name))} to the list.`;
+  }
   const next: Onboarding = { step: "items", shopIds: shops.map((s) => s.id), index: 0, guess: null, askedAt: bot.now().toISOString() };
-  const ack = `✅ Added ${andList(shops.filter((s) => !already.includes(s.name)).map((s) => bold(s.name)))}.`.replace("✅ Added .", "✅ Got it.");
+  const ack = `✅ Added ${andList(shops.filter((s) => !already.includes(s.name)).map((s) => bold(s.name)))}.`.replace("✅ Added .", "✅ Got it.") + alsoAdded;
   await askAboutShop(bot, next, ack, m);
+  return true;
 }
 
 async function finishShopsSkipped(bot: Bot, ob: Onboarding, m: IncomingMessage): Promise<void> {
@@ -170,11 +254,28 @@ async function answerItems(bot: Bot, ob: Onboarding, m: IncomingMessage): Promis
     await bot.store.updateShop(shop.id, { example_items: examples, categories });
     await bot.store.upsertRules(items.map((item_name) => ({ item_name, shop_id: shop.id, origin: "setup" as const })));
     bot.log(`✓ ${shop.name}: ${items.join(", ")}${useGuess ? " (the AI's guess, confirmed)" : ""}`);
-    ack = `✅ ${bold(shop.name)}: ${andList(items)}.`;
+    const moved = await sortNeedsReview(bot);
+    ack = `✅ ${bold(shop.name)}: ${andList(items)}.` +
+      (moved.length ? ` Moved ${andList(moved.map(bold))} out of Needs review.` : "");
   }
   const next: Onboarding = { ...ob, index: ob.index + 1, guess: null };
   if (next.index < next.shopIds.length) return askAboutShop(bot, next, ack, m);
   return finish(bot, next, ack, m);
+}
+
+/** Items waiting in Needs review that the shops' items can now place. Returns their names. */
+async function sortNeedsReview(bot: Bot): Promise<string[]> {
+  const [shops, rules, pairs, needed] = await Promise.all([bot.store.shops(), bot.store.rules(), bot.store.synonymPairs(), bot.store.neededItems()]);
+  const groups = buildSynonymGroups(pairs);
+  const moved: string[] = [];
+  for (const item of needed.filter((i) => !i.shop_id)) {
+    const shopId = suggestShop(item.item_key, rules, shops, groups);
+    if (!shopId) continue;
+    await bot.store.updateItem(item.id, { shop_id: shopId });
+    moved.push(item.name);
+  }
+  if (moved.length) bot.log(`moved out of Needs review: ${moved.join(", ")}`);
+  return moved;
 }
 
 /** Ends the setup chat: what's set up, how to use it, and a tip about family words. */

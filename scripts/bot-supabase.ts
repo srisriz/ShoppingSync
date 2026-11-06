@@ -60,13 +60,27 @@ export function supabaseStore(db: SupabaseClient, fid: string): BotStore {
       await db.from("items").update(patch).eq("id", id);
     },
     async setStatus(ids, status, opts) {
-      let q = db.from("items")
-        .update({ status, bought_at: status === "bought" ? now() : null })
-        .eq("family_id", fid).eq("status", "needed");
-      if (ids !== "all") q = q.in("id", ids);
-      if (opts?.shopId) q = q.eq("shop_id", opts.shopId);
-      const { data } = await q.select("id");
-      return (data ?? []).map((r) => r.id as string);
+      const run = async (withBy: boolean) => {
+        const change: Record<string, unknown> = { status, bought_at: status === "bought" ? now() : null };
+        if (withBy) change.bought_by = status === "bought" ? opts?.by ?? null : null;
+        let q = db.from("items").update(change).eq("family_id", fid).eq("status", "needed");
+        if (ids !== "all") q = q.in("id", ids);
+        if (opts?.shopId) q = q.eq("shop_id", opts.shopId);
+        return q.select("id");
+      };
+      let res = await run(true);
+      // Before migration 0009 there's no bought_by column: tick off without it.
+      if (res.error && /bought_by/.test(res.error.message)) res = await run(false);
+      return (res.data ?? []).map((r) => r.id as string);
+    },
+    async recentlyBought(sinceIso) {
+      let res = await db.from("items").select("name, item_key, bought_at, bought_by")
+        .eq("family_id", fid).eq("status", "bought").gte("bought_at", sinceIso).order("bought_at", { ascending: false }).limit(200);
+      if (res.error && /bought_by/.test(res.error.message)) {
+        res = await db.from("items").select("name, item_key, bought_at")
+          .eq("family_id", fid).eq("status", "bought").gte("bought_at", sinceIso).order("bought_at", { ascending: false }).limit(200) as typeof res;
+      }
+      return (res.data ?? []).map((r) => ({ name: r.name, item_key: r.item_key, bought_at: r.bought_at, bought_by: (r as { bought_by?: string | null }).bought_by ?? null }));
     },
     async deleteItems(ids) {
       await db.from("items").delete().in("id", ids);

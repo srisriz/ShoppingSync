@@ -26,6 +26,16 @@ const HINGLISH: Record<string, string> = {
   chahiye: "needed", chaiye: "needed", lao: "bring", lana: "bring", khatam: "finished", aur: "and", bhi: "also",
   "ho gaya": "", "ho gayi": "", hai: "", ka: "", ki: "", ke: "",
 };
+// A little Spanish and French, used only when the message clearly is one of them.
+const EUROPEAN: { name: string; marker: RegExp; words: Record<string, string> }[] = [
+  { name: "Spanish", marker: /\b(?:leche|pan|huevos|arroz|necesitamos|por favor|compra|mantequilla|queso|patatas)\b/i,
+    words: { "por favor": "please", necesitamos: "we need", compra: "buy", leche: "milk", pan: "bread", huevos: "eggs", arroz: "rice",
+      mantequilla: "butter", queso: "cheese", patatas: "potatoes", manzanas: "apples", y: "and", "más": "more", mas: "more" } },
+  { name: "French", marker: /\b(?:lait|pain|oeufs|œufs|beurre|fromage|riz|s'il te pla[iî]t|il faut|acheter)\b/i,
+    words: { "s'il te plaît": "please", "s'il te plait": "please", "il faut": "we need", acheter: "buy", lait: "milk", pain: "bread",
+      oeufs: "eggs", "œufs": "eggs", beurre: "butter", fromage: "cheese", riz: "rice", pommes: "apples", et: "and", du: "", de: "", des: "", le: "", la: "", les: "" } },
+];
+
 // A few whole words in other scripts (Hindi and Tamil), for the demo.
 const SCRIPT_WORDS: Record<string, string> = {
   "दूध": "milk", "नमक": "salt", "चीनी": "sugar", "चावल": "rice", "अंडे": "eggs", "दही": "curd", "प्याज": "onions",
@@ -62,6 +72,7 @@ export function toEnglish(message: string, keepWords: string[] = []): Translatio
   };
   swap(TANGLISH, "Tanglish");
   swap(HINGLISH, "Hinglish");
+  for (const lang of EUROPEAN) if (language === "English" && lang.marker.test(english)) swap(lang.words, lang.name);
   english = english.replace(/\s{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
   // Hindi and Tamil put the verb last ("on the way salt buy"): put it first, as English does.
   if (language === "Hindi" || language === "Tamil") {
@@ -230,7 +241,8 @@ export function chatReply(message: string, ctx: { toBot: boolean }, now = new Da
 
 /** Names in a sentence: "we mostly go to Tesco and the Indian shop, sometimes Boots". */
 export function readList(kind: "shops" | "items", text: string): string[] {
-  const cleaned = text
+  const english = toEnglish(text).english.replace(/\b(?:please|pls|plz|thanks)\b/gi, " ");
+  const cleaned = english
     .replace(/\b(?:we|i|usually|mostly|normally|generally|go to|shop at|buy from|get (?:stuff|things) from|sometimes|occasionally|also|too|as well|the one near us|near us|nearby|for|our|my)\b/gi, ",")
     .replace(/\bthe\s+indian\s+(?:shop|store)\b/gi, "Indian grocer");
   return cleaned.split(/\s*(?:,|\band\b|&|\bor\b|\.|;)\s*/i)

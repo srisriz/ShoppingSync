@@ -22,13 +22,21 @@
 .sim :focus-visible { outline: 3px solid var(--sim-aubergine); outline-offset: 2px; border-radius: 6px; }
 
 /* ------------------------------------------------------------------ layout */
-.sim-grid { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 32px; align-items: start; }
-.sim-phone-col { position: sticky; top: 16px; min-width: 0; }
+/* Wide screens: the phone on the left, the heading and panels beside it.
+   Phones: heading, then the phone (filling the screen), then the panels. */
+.sim-grid {
+  display: grid; grid-template-columns: 380px minmax(0, 1fr); grid-template-rows: auto 1fr;
+  grid-template-areas: "phone intro" "phone side"; gap: 24px 32px; align-items: start;
+}
+.sim-intro { grid-area: intro; min-width: 0; }
+.sim-phone-col { grid-area: phone; position: sticky; top: 16px; min-width: 0; scroll-margin-top: 16px; }
+.sim-side { grid-area: side; }
 
 /* ------------------------------------------------------------------ the phone */
 .sim-phone {
   position: relative; display: flex; flex-direction: column; background: #111; border-radius: 46px; padding: 11px;
-  height: min(760px, calc(100vh - 110px)); height: min(760px, calc(100dvh - 110px)); min-height: 560px;
+  /* Always fits the screen, so the message box is in view when "Try it" lands here */
+  height: min(820px, calc(100vh - 32px)); height: min(820px, calc(100dvh - 32px)); min-height: 500px;
   box-shadow: 0 0 0 2px #2b2b2b, 0 30px 60px -22px rgba(18, 41, 31, 0.5);
 }
 .sim-notch { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 104px; height: 28px; background: #111; border-radius: 20px; z-index: 3; }
@@ -106,7 +114,21 @@
 .sim-replying b { display: block; color: #06cf9c; }
 .sim-replying span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--wa-meta); }
 .sim-replying button { border: none; background: none; color: var(--wa-meta); cursor: pointer; font-size: 15px; padding: 4px; }
-.sim-input { display: flex; gap: 6px; }
+.sim-input { display: flex; gap: 6px; position: relative; }
+
+/* "Try it here": a flashing pointer at the message box until it's used */
+.sim-hint-arrow {
+  position: absolute; top: 50%; right: 58px; z-index: 2; pointer-events: none; white-space: nowrap;
+  background: var(--sim-turmeric); color: var(--sim-leaf-ink); font-weight: 800; font-size: 13px; padding: 5px 11px;
+  border-radius: 999px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  animation: sim-nudge 1.1s ease-in-out infinite, sim-flash 1.1s ease-in-out infinite;
+}
+.sim-hint-arrow b { display: inline-block; margin-right: 3px; }
+.sim-input.hint input { box-shadow: 0 0 0 2px var(--sim-turmeric); animation: sim-glow 1.4s ease-in-out infinite; }
+@keyframes sim-nudge { 0%, 100% { transform: translate(0, -50%); } 50% { transform: translate(-6px, -50%); } }
+@keyframes sim-flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+@keyframes sim-glow { 0%, 100% { box-shadow: 0 0 0 2px var(--sim-turmeric); } 50% { box-shadow: 0 0 0 6px rgba(242, 177, 52, 0.35); } }
+@media (prefers-reduced-motion: reduce) { .sim-hint-arrow, .sim-input.hint input { animation: none; } .sim-hint-arrow { transform: translateY(-50%); } }
 /* 16px stops iPhones zooming in when the box is tapped */
 .sim-input input { flex: 1; min-width: 0; font: inherit; font-size: 16px; border: none; border-radius: 22px; padding: 10px 15px; background: var(--wa-theirs); color: var(--wa-ink); }
 .sim-input input::placeholder { color: var(--wa-meta); }
@@ -190,16 +212,17 @@
   .sim-phrases { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 860px) {
-  .sim-grid { grid-template-columns: minmax(0, 1fr); }
+  .sim-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "intro" "phone" "side"; }
   .sim-phone-col { position: static; }
-  .sim-phone { height: min(700px, 82vh); height: min(700px, 82dvh); max-width: 420px; margin: 0 auto; }
+  .sim-phone { height: min(760px, calc(100vh - 32px)); height: min(760px, calc(100dvh - 32px)); max-width: 420px; margin: 0 auto; }
   .sim-controls { max-width: 420px; margin-left: auto; margin-right: auto; }
   .sim-try-panel { order: -1; }
   .sim-side { grid-template-columns: minmax(0, 1fr); }
 }
 /* Phones: the chat fills the width, like WhatsApp itself */
 @media (max-width: 600px) {
-  .sim-phone { border-radius: 0; padding: 0; margin: 0 -20px; max-width: none; height: min(640px, 78vh); height: min(640px, 78dvh); min-height: 460px; box-shadow: none; }
+  .sim-phone-col { scroll-margin-top: 0; }
+  .sim-phone { border-radius: 0; padding: 0; margin: 0 -20px; max-width: none; height: calc(100vh - 8px); height: calc(100dvh - 8px); max-height: 760px; min-height: 440px; box-shadow: none; }
   .sim-notch { display: none; }
   .sim-wa-head { padding-top: 12px; border-radius: 0; }
   .sim-compose { border-radius: 0; padding-bottom: 12px; }

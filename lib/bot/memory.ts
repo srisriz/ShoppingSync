@@ -7,7 +7,7 @@ import type { SummaryItem } from "../info";
 import type { BotItem, BotRule, BotShop, BotStore, Onboarding, ParkedInput, QuestionInput } from "./ports";
 import type { SynonymPair } from "../matching";
 
-export type DemoItem = BotItem & { proposed_shop_id: string | null; proposal_confidence: number | null; proposal_reason: string | null; proposed_at: string | null };
+export type DemoItem = BotItem & { bought_by?: string | null; proposed_shop_id: string | null; proposal_confidence: number | null; proposal_reason: string | null; proposed_at: string | null };
 type Task = { id: string; kind: "question" | "extract"; status: "queued" | "running" | "done"; message_id: string; created_at: number; input: unknown; result?: unknown };
 
 export type DemoData = {
@@ -62,9 +62,15 @@ export function memoryStore(d: DemoData, now: () => Date = () => new Date()): Bo
         if (opts?.shopId && it.shop_id !== opts.shopId) continue;
         it.status = status;
         it.bought_at = status === "bought" ? iso() : null;
+        it.bought_by = status === "bought" ? opts?.by ?? null : null;
         changed.push(it.id);
       }
       return changed;
+    },
+    async recentlyBought(since) {
+      return d.items.filter((i) => i.status === "bought" && !!i.bought_at && i.bought_at >= since)
+        .sort((a, b) => b.bought_at!.localeCompare(a.bought_at!))
+        .map((i) => ({ name: i.name, item_key: i.item_key, bought_at: i.bought_at!, bought_by: i.bought_by ?? null }));
     },
     async deleteItems(ids) { d.items = d.items.filter((i) => !ids.includes(i.id)); },
     async moveNeededByKey(itemKey, shopId) {
@@ -154,7 +160,7 @@ export function demoSeed(): DemoData {
     ],
     rules: [],
     synonyms: [{ word_a: "paal", word_b: "milk" }, { word_a: "thayir", word_b: "curd" }, { word_a: "arisi", word_b: "rice" }],
-    members: ["Amma", "Appa", "Ravi", "Priya"],
+    members: ["Mom", "Dad", "Bob", "Betty"],
     items: [],
     tasks: [],
     lists: {},
@@ -164,5 +170,5 @@ export function demoSeed(): DemoData {
 
 /** A brand-new group: no shops yet, so the bot starts the setup chat. */
 export function newGroupSeed(): DemoData {
-  return { shops: [], rules: [], synonyms: [], members: ["Amma", "Appa", "Ravi", "Priya"], items: [], tasks: [], lists: {}, onboarding: null };
+  return { shops: [], rules: [], synonyms: [], members: ["Mom", "Dad", "Bob", "Betty"], items: [], tasks: [], lists: {}, onboarding: null };
 }

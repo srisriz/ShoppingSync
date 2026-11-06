@@ -368,3 +368,27 @@ export async function guessShopItems(shop: string, llm: JsonLlm = ollamaJson): P
   const clean = (xs: unknown[] | undefined, n: number) => (xs ?? []).map((x) => String(x ?? "").trim().toLowerCase().slice(0, 30)).filter(Boolean).slice(0, n);
   return { examples: clean(out.examples, 8), categories: clean(out.categories, 3), confidence: Math.max(0, Math.min(1, Number(out.confidence) || 0)) };
 }
+
+const SHOP_ANSWER_PROMPT = [
+  "You read one reply from a UK family's WhatsApp group to the setup question \"Which shops do you usually buy from?\".",
+  "Split what they wrote into shops (places they buy from: supermarkets, chains, \"the Indian shop near us\" -> \"Indian grocer\",",
+  "\"the chemist\" -> \"Chemist\") and items (things to buy that they mentioned instead, e.g. \"milk\", \"we need eggs\" -> \"eggs\").",
+  "People often ignore the question and just post shopping: then shops is empty and items has what they want.",
+  "Use short names; keep family words and other languages as written (\"paal\"). Never invent names.",
+].join(" ");
+
+/** A reply to "Which shops do you use?", split into shops and any items mentioned instead. */
+export async function readShopAnswer(message: string, llm: JsonLlm = ollamaJson): Promise<{ shops: string[]; items: string[] }> {
+  const out = (await llm({
+    system: SHOP_ANSWER_PROMPT,
+    user: message,
+    schema: {
+      type: "object",
+      properties: { shops: { type: "array", items: { type: "string" } }, items: { type: "array", items: { type: "string" } } },
+      required: ["shops", "items"],
+    },
+    temperature: 0,
+  })) as { shops?: unknown[]; items?: unknown[] };
+  const clean = (xs: unknown[] | undefined) => (xs ?? []).map((x) => String(x ?? "").trim().slice(0, 40)).filter(Boolean).slice(0, 12);
+  return { shops: clean(out.shops), items: clean(out.items) };
+}

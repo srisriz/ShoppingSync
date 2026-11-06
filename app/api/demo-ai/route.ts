@@ -4,7 +4,7 @@
  * can't be used as a general-purpose AI. The demo falls back to its built-in
  * stand-in whenever this isn't available.
  */
-import { chatReply, extractActions, guessShopItems, proposeShop, readList, toEnglish, type AiShop } from "@/lib/ai";
+import { chatReply, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, toEnglish, type AiShop } from "@/lib/ai";
 import { GROQ_MODEL, groqConfigured, groqJson } from "@/lib/ai-groq";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +68,9 @@ export async function POST(req: Request) {
       }
       case "readList":
         result = await readList(a.kind === "shops" ? "shops" : "items", str(a.text), groqJson);
+        break;
+      case "readShopAnswer":
+        result = await readShopAnswer(str(a.text), groqJson);
         break;
       case "guessShopItems":
         result = await guessShopItems(str(a.shop, 40), groqJson);

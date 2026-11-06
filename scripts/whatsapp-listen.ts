@@ -31,7 +31,7 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { createClient } from "@supabase/supabase-js";
 import { normalise } from "../lib/matching";
-import { chatReply, checkOllama, extractActions, guessShopItems, proposeShop, readList, toEnglish } from "../lib/ai";
+import { chatReply, checkOllama, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, toEnglish } from "../lib/ai";
 import { generateToken, looksLikeCode, normaliseCode, sha256Hex } from "../lib/codes";
 import { handleMessage, maybeStartOnboarding, processQueuedMessages, proposeForReviewItems } from "../lib/bot/core";
 import type { Bot, BotAi, BotChat, BotState, IncomingMessage } from "../lib/bot/ports";
@@ -111,6 +111,7 @@ const ollama: BotAi = {
   chatReply: (text, sender, ctx) => chatReply(text, sender, ctx),
   proposeShop: (item, shops, past, same) => proposeShop(item, shops, past, same),
   readList: (kind, text) => readList(kind, text),
+  readShopAnswer: (text) => readShopAnswer(text),
   guessShopItems: (shop) => guessShopItems(shop),
 };
 

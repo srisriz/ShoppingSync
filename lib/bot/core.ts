@@ -43,7 +43,12 @@ export function isCommand(text: string): boolean {
  *  - a group with no shops that was never set up is offered the setup chat afterwards
  */
 export async function handleMessage(bot: Bot, m: IncomingMessage): Promise<void> {
-  if (await handleOnboarding(bot, m)) return;
+  const addItems = async (actions: ParsedAction[], msg: IncomingMessage) => {
+    const r = await applyActions(bot, actions, msg.sender, msg.id);
+    if (r.changes > 0) bot.afterChange();
+    return r;
+  };
+  if (await handleOnboarding(bot, m, addItems)) return;
   await handleText(bot, m);
   await maybeStartOnboarding(bot);
 }
@@ -152,7 +157,7 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
   const answer = parseAnswer(english);
   if (answer && (await handleAnswer(bot, answer, sender, m.quotedId))) return;
   const done = parseDone(english);
-  if (done) return handleDone(bot, done.shop, m.quotedId);
+  if (done) return handleDone(bot, done.shop, m.quotedId, sender);
 
   const reading: Reading = listActions
     ? { actions: listActions, preferences: [], fromAi: false }
@@ -495,9 +500,11 @@ export async function applyActions(bot: Bot, actions: ParsedAction[], sender: st
   const [shops, rules, needed, members, synonyms] = await Promise.all([
     bot.store.shops(), bot.store.rules(), bot.store.neededItems(), bot.store.members(), loadSynonyms(bot),
   ]);
+  let recent: Awaited<ReturnType<typeof bot.store.recentlyBought>> | null = null; // loaded only if needed
   const requester = members.find((n) => normalise(n) === normalise(sender)) ?? sender;
   const shopName = new Map(shops.map((s) => [s.id, s.name]));
   const added: string[] = [], updated: string[] = [], bought: string[] = [], removed: string[] = [], missing: string[] = [];
+  const alreadyDone: string[] = [];
   let changes = 0;
   for (const action of actions) {
     const key = normalise(action.name);
@@ -526,14 +533,24 @@ export async function applyActions(bot: Bot, actions: ParsedAction[], sender: st
       changes++;
     } else if (existing) {
       const status = action.kind === "bought" ? "bought" : "removed";
-      await bot.store.setStatus([existing.id], status);
+      await bot.store.setStatus([existing.id], status, { by: requester });
       needed.splice(needed.indexOf(existing), 1);
       bot.log(`${status === "bought" ? "✓" : "−"} ${action.name} (${status})`);
       (status === "bought" ? bought : removed).push(action.name);
       changes++;
     } else {
-      bot.log(`? ${action.name}: not on the list, nothing to ${action.kind === "bought" ? "tick" : "remove"}`);
-      missing.push(action.name);
+      // Not on the list. Was it ticked off recently? Then say who and when, so nobody buys it twice.
+      recent ??= await bot.store.recentlyBought(new Date(bot.now().getTime() - RECENT_MS).toISOString());
+      const done = recent.find((r) => sameItem(r.item_key, key, synonyms));
+      if (done) {
+        const who = !done.bought_by ? "" : normalise(done.bought_by) === normalise(requester) ? "You" : done.bought_by;
+        const when = whenSaid(done.bought_at, bot.now());
+        alreadyDone.push(who ? `${who} already ticked off ${done.name} ${when}` : `${done.name} was already ticked off ${when}`);
+        bot.log(`? ${action.name}: already ticked off ${when}${done.bought_by ? ` by ${done.bought_by}` : ""}`);
+      } else {
+        bot.log(`? ${action.name}: not on the list, nothing to ${action.kind === "bought" ? "tick" : "remove"}`);
+        missing.push(action.name);
+      }
     }
   }
   const parts = [
@@ -541,9 +558,24 @@ export async function applyActions(bot: Bot, actions: ParsedAction[], sender: st
     updated.length ? `Updated ${andList(updated)}` : "",
     bought.length ? `Ticked off ${andList(bought)}` : "",
     removed.length ? `Removed ${andList(removed)}` : "",
+    ...alreadyDone,
     missing.length ? `${andList(missing)} ${missing.length === 1 ? "wasn't" : "weren't"} on the list` : "",
   ].filter(Boolean);
   return { changes, summary: parts.length ? `${changes > 0 ? "✅ " : ""}${parts.join(". ")}.` : "" };
+}
+
+/** How far back "already ticked off" looks. */
+const RECENT_MS = 24 * 3600 * 1000;
+
+/** "at 14:20" today, "yesterday at 18:05" (UK time). */
+function whenSaid(iso: string, now: Date): string {
+  const opts = { timeZone: "Europe/London" } as const;
+  const day = (d: Date) => d.toLocaleDateString("en-GB", opts);
+  const t = new Date(iso);
+  const time = t.toLocaleTimeString("en-GB", { ...opts, hour: "2-digit", minute: "2-digit" });
+  if (day(t) === day(now)) return `at ${time}`;
+  if (day(t) === day(new Date(now.getTime() - 24 * 3600 * 1000))) return `yesterday at ${time}`;
+  return `on ${t.toLocaleDateString("en-GB", { ...opts, weekday: "long" })} at ${time}`;
 }
 
 /** The current list as a WhatsApp message, shop by shop, plus the ids of the items on it. */
@@ -559,12 +591,12 @@ export async function buildListMessage(bot: Bot): Promise<{ text: string; itemId
  *   done costco (reply to a list) -> tick off the Costco items that were on that list
  * A "done" that matches nothing is left alone, so chat like "done for today" is harmless.
  */
-async function handleDone(bot: Bot, shopSaid: string | null, quotedId: string | null): Promise<void> {
+async function handleDone(bot: Bot, shopSaid: string | null, quotedId: string | null, by: string): Promise<void> {
   const quotedList = quotedId ? await bot.store.listItemIds(quotedId) : undefined;
 
   if (!shopSaid) {
     if (!quotedList) { bot.log("(Done, but not as a reply to a list; left alone)"); return; }
-    const cleared = quotedList.length ? (await bot.store.setStatus(quotedList, "bought")).length : 0;
+    const cleared = quotedList.length ? (await bot.store.setStatus(quotedList, "bought", { by })).length : 0;
     const remaining = (await bot.store.neededItems()).length;
     await reply(bot);
     const since = remaining > 0 ? ` ${items(remaining)} added since is still on; send "list" to see.` : "";
@@ -588,7 +620,7 @@ async function handleDone(bot: Bot, shopSaid: string | null, quotedId: string | 
     await bot.chat.send(`Which one: ${match.shops.map((s) => s.name).join(" or ")}? Reply e.g. "done ${match.shops[0].name}".`);
     return;
   }
-  const n = (await bot.store.setStatus(quotedList ?? "all", "bought", { shopId: match.shop.id })).length;
+  const n = (await bot.store.setStatus(quotedList ?? "all", "bought", { shopId: match.shop.id, by })).length;
   await reply(bot);
   if (n === 0) {
     await bot.chat.send(`Nothing left on the ${match.shop.name} list.`);

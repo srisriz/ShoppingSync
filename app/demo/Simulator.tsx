@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { handleMessage, maybeStartOnboarding, processQueuedMessages, proposeForReviewItems } from "@/lib/bot/core";
 import { demoSeed, memoryStore, newGroupSeed, newId, type DemoData } from "@/lib/bot/memory";
 import type { Bot, BotState, IncomingMessage } from "@/lib/bot/ports";
@@ -18,10 +18,10 @@ type ChatMsg = {
   system?: boolean;
 };
 
-const SENDERS = ["You", "Amma", "Appa", "Ravi", "Priya"];
-const NAME_COLOURS: Record<string, string> = { Amma: "#b4357a", Appa: "#1f7a8c", Ravi: "#7a4fc4", Priya: "#c2571a" };
+const SENDERS = ["You", "Mom", "Dad", "Bob", "Betty"];
+const NAME_COLOURS: Record<string, string> = { Mom: "#b4357a", Dad: "#1f7a8c", Bob: "#7a4fc4", Betty: "#c2571a" };
 
-const SETUP_TRY = { label: "Answer the setup questions", messages: ["Tesco, Lidl and the Indian shop", "we mostly go to Tesco and the Indian shop near us, sometimes Boots", "yes", "milk, bread, eggs, pasta", "skip", "stop setup"] };
+const SETUP_TRY = { label: "Answer the setup questions", messages: ["Tesco, Lidl and the Indian shop", "we mostly go to Tesco and the Indian shop near us, sometimes Boots", "milk", "yes", "milk, bread, eggs, pasta", "skip", "stop setup"] };
 
 /** Things you can say: tap one to send it in the demo. */
 const TRY: { label: string; items: [string, string][] }[] = [
@@ -38,6 +38,7 @@ const TRY: { label: string; items: [string, string][] }[] = [
     ["thakkali theernduchu", "“Tomatoes are finished”, so it adds tomatoes."],
     ["रास्ते में नमक खरीद लें", "Other scripts too; it checks before acting."],
     ["can you pick up lemons and coriander on the way home", "A sentence: the AI reads it and asks you to confirm."],
+    ["the party is over", "Not shopping, so it's left alone."],
   ] },
   { label: "Ticking off", items: [
     ["got milk", "Ticks one thing off."],
@@ -50,16 +51,16 @@ const TRY: { label: string; items: [string, string][] }[] = [
     ["eggs are better in Waitrose", "Where you like to buy something."],
     ["The new Ramayana movie should be seen at iMax", "Outings get a place too."],
     ["add shop Lidl: fruit, veg", "A new shop, with what you buy there."],
-    ["replace riz with rice", "Fixes a misspelt item."],
+    ["replace riz with rice", "Fixes a misspelt item (send “riz” first)."],
   ] },
   { label: "Everything else", items: [
     ["help", "What the bot can do."],
     ["summary", "What happened on the list today."],
     ["what time is it in Chennai?", "Answers questions meant for it."],
-    ["Amma what time are you home?", "Stays out of family conversations."],
+    ["Mom, what time are you home?", "Stays out of family conversations."],
   ] },
 ];
-const QUICK = ["milk", "paal venum", "eggs, bread and butter", "we're out of rice", "list", "got milk", "eggs are better in Waitrose", "what time is it in Chennai?"];
+const QUICK = ["milk", "paal venum", "eggs, bread and butter", "we're out of rice", "doodh chahiye", "list", "got milk", "what time is it in Chennai?"];
 
 /** WhatsApp formatting: *bold*, _italic_, line breaks. */
 function Formatted({ text }: { text: string }) {
@@ -68,7 +69,7 @@ function Formatted({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         /^\*[^*]+\*$/.test(p) ? <strong key={i}>{p.slice(1, -1)}</strong>
-          : /^_[^_]+_$/.test(p) ? <em key={i}>{p.slice(1, -1)}</em>
+          : /^_[^_]+_$/.test(p) ? <em key={i}><Formatted text={p.slice(1, -1)} /></em>
             : <span key={i}>{p}</span>)}
     </>
   );
@@ -78,7 +79,10 @@ const plain = (t: string) => t.split("\n")[0].replace(/[*_]/g, "");
 const clock = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const isAiLine = (line: string) => /^AI\b|asking the AI|AI read|AI translated|AI suggests|AI guessed|AI:|^↳/.test(line);
 
-export default function Simulator() {
+/** `intro` is the section's heading: beside the phone on wide screens, above it on phones. */
+export default function Simulator({ intro }: { intro?: ReactNode }) {
+  // "Try it here" pointer at the message box, until someone uses it.
+  const [hinted, setHinted] = useState(false);
   const [start, setStart] = useState<"new" | "ready">("new");
   const data = useRef<DemoData>(newGroupSeed());
   // Which AI answers: Qwen on Groq when the website has a key, else the built-in stand-in.
@@ -163,6 +167,7 @@ export default function Simulator() {
     const msg: ChatMsg = { id: newId("msg"), from: as, text: body, at: new Date(), quotedId: quoted?.id ?? null, trace: [] };
     push(msg);
     setSelected(msg.id);
+    setHinted(true);
     setText("");
     setReplyTo(null);
     queue.current = queue.current.then(async () => {
@@ -271,15 +276,16 @@ export default function Simulator() {
 
   return (
     <div className="sim-grid">
+      {intro && <div className="sim-intro">{intro}</div>}
       {/* ---------------------------------------------------------------- phone */}
-      <section className="sim-phone-col">
+      <section className="sim-phone-col" id="try">
         <div className="sim-phone" aria-label="WhatsApp group chat" ref={phone}>
           <div className="sim-notch" aria-hidden="true" />
           <header className="sim-wa-head">
             <div className="sim-avatar" aria-hidden="true">🛒</div>
             <div>
               <div className="sim-wa-title">Family Shopping</div>
-              <div className="sim-wa-sub">{typing ? "ShoppingSync is typing…" : "Amma, Appa, Ravi, Priya, ShoppingSync, You"}</div>
+              <div className="sim-wa-sub">{typing ? "ShoppingSync is typing…" : "Mom, Dad, Bob, Betty, ShoppingSync, You"}</div>
             </div>
           </header>
 
@@ -341,8 +347,10 @@ export default function Simulator() {
                 <button onClick={() => setReplyTo(null)} aria-label="Cancel reply">✕</button>
               </div>
             )}
-            <form className="sim-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>
-              <input ref={input} value={text} onChange={(e) => setText(e.target.value)} placeholder={`Message as ${sender}`} aria-label="Message" />
+            <form className={`sim-input${hinted ? "" : " hint"}`} onSubmit={(e) => { e.preventDefault(); send(text); }}>
+              {!hinted && <span className="sim-hint-arrow" aria-hidden="true"><b>←</b> Try it here</span>}
+              <input ref={input} value={text} onChange={(e) => setText(e.target.value)} onFocus={() => setHinted(true)}
+                placeholder={`Message as ${sender}`} aria-label="Message" />
               <button type="submit" aria-label="Send" disabled={!text.trim()}>➤</button>
             </form>
           </div>

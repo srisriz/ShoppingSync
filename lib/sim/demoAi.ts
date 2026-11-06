@@ -57,6 +57,7 @@ export function demoAi(data: DemoData, mode: () => AiMode, note: Note, onFallbac
       return { isItem: true, shopId: p.shopId, confidence: p.confidence, reason: p.reason };
     }),
     readList: (kind, text) => ask("readList", { kind, text }, () => brain.readList(kind, text)),
+    readShopAnswer: (text) => ask("readShopAnswer", { text }, () => ({ shops: brain.readList("shops", text), items: [] })),
     guessShopItems: (shop) => ask("guessShopItems", { shop }, () => brain.guessShopItems(shop)),
   };
 }

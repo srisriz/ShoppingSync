@@ -116,15 +116,16 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
           </section>
         )}
 
-        <section className="um-section um-try" id="try">
+        <section className="um-section um-try" id="try-it">
           <div className="um-wrap">
-            <h2>Try it in a pretend family group</h2>
-            <p className="um-sub">
-              Type as anyone in the family and watch the bot reply, sort the list by shop and learn your family&apos;s words.
-              It&apos;s the bot&apos;s real message handling, running right here. Nothing is saved.
-            </p>
             <div className="sim">
-              <Simulator />
+              <Simulator intro={<>
+                <h2>Try it in a pretend family group</h2>
+                <p className="um-sub">
+                  Type as anyone in the family and watch the bot reply, sort the list by shop and learn your family&apos;s words.
+                  It&apos;s the bot&apos;s real message handling, running right here. Nothing is saved.
+                </p>
+              </>} />
             </div>
           </div>
         </section>
@@ -193,9 +194,9 @@ function Demo() {
   return (
     <div className="um-demo" aria-label="Example: three WhatsApp messages become a shopping list sorted by shop">
       <div className="um-chat">
-        <div className="um-msg d1"><b>Amma</b>paal venum, and we&apos;re out of rice</div>
-        <div className="um-msg d2"><b>Ravi</b>eggs and bread pls</div>
-        <div className="um-msg d3"><b>Priya</b>got the bread 👍</div>
+        <div className="um-msg d1"><b>Mom</b>paal venum, and we&apos;re out of rice</div>
+        <div className="um-msg d2"><b>Bob</b>eggs and bread pls</div>
+        <div className="um-msg d3"><b>Betty</b>got the bread 👍</div>
       </div>
       <div className="um-note" aria-hidden="true">
         <div className="um-shop d1">Tesco</div>

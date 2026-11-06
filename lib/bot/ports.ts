@@ -48,6 +48,8 @@ export type Onboarding = {
   index: number;
   guess: { examples: string[]; categories: string[] } | null;
   askedAt: string;
+  /** Already re-asked once after an answer that wasn't shops (e.g. "milk"): don't nag again. */
+  nudged?: boolean;
 };
 
 /** A message saved while the AI was off. */
@@ -64,7 +66,9 @@ export interface BotStore {
   addItem(item: NewItem): Promise<BotItem | null>;
   updateItem(id: string, patch: Partial<Pick<BotItem, "name" | "quantity" | "requested_by" | "shop_id">>): Promise<void>;
   /** Marks still-needed items bought/removed; returns the ids that changed. With a shop, only that shop's items. */
-  setStatus(ids: string[] | "all", status: "bought" | "removed", opts?: { shopId?: string }): Promise<string[]>;
+  setStatus(ids: string[] | "all", status: "bought" | "removed", opts?: { shopId?: string; by?: string }): Promise<string[]>;
+  /** Items ticked off since then, newest first, with who ticked them off (if known). */
+  recentlyBought(sinceIso: string): Promise<{ name: string; item_key: string; bought_at: string; bought_by: string | null }[]>;
   deleteItems(ids: string[]): Promise<void>;
   moveNeededByKey(itemKey: string, shopId: string): Promise<void>;
 
@@ -108,6 +112,8 @@ export interface BotAi {
   proposeShop(item: string, shops: AiShop[], past: PastChoice[], sameThings: string[][]): Promise<Proposal>;
   /** Setup chat: the shops or items listed in a sentence. */
   readList(kind: "shops" | "items", text: string): Promise<string[]>;
+  /** Setup chat: a reply to "which shops?", split into shops and any items mentioned instead. */
+  readShopAnswer(text: string): Promise<{ shops: string[]; items: string[] }>;
   /** Setup chat: a starting guess of what a family buys at a shop. */
   guessShopItems(shop: string): Promise<{ examples: string[]; categories: string[]; confidence: number }>;
 }
