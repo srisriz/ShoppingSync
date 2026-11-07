@@ -141,6 +141,17 @@ and console login. Nothing is shared between groups.
 3. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
    while testing (`http://192.168.x.x:3000`, shown as "Network" when `npm run dev` starts), or the Vercel URL.
 
+## The context window
+
+Clear messages ("milk", "got eggs", "done Tesco", "list") are handled straight away by the word rules. Anything else
+(a question, "No", half a sentence) goes into a short **context window** with the messages around it, and the AI reads
+them as one conversation each time one is added. So Bob's "do we have eggs?" followed by Mom's "No" becomes
+"I'll add *eggs* to the list. Reply *yes* to confirm". Anything the AI finds is asked about first, never done directly.
+A question about the list ("do we have eggs?", "did anyone get bread?") is answered from the list itself.
+
+The window is kept in `families.chat_window` (migration 0010) and deleted as soon as the bot acts or asks, after
+10 messages (the oldest drop off), or after 5 quiet minutes (the listener sweeps every minute).
+
 ## Needs review and the local AI
 
 Items no rule matches appear under **Needs review** at the top of the list. While the listener runs,

@@ -4,7 +4,7 @@
  */
 import { normalise } from "../matching";
 import type { SummaryItem } from "../info";
-import type { BotItem, BotRule, BotShop, BotStore, Onboarding, ParkedInput, QuestionInput } from "./ports";
+import type { BotItem, BotRule, BotShop, BotStore, ChatWindow, Onboarding, ParkedInput, QuestionInput } from "./ports";
 import type { SynonymPair } from "../matching";
 
 export type DemoItem = BotItem & { bought_by?: string | null; proposed_shop_id: string | null; proposal_confidence: number | null; proposal_reason: string | null; proposed_at: string | null };
@@ -19,6 +19,7 @@ export type DemoData = {
   tasks: Task[];
   lists: Record<string, string[]>;
   onboarding: Onboarding | null;
+  window?: ChatWindow | null;
 };
 
 let seq = 0;
@@ -88,6 +89,8 @@ export function memoryStore(d: DemoData, now: () => Date = () => new Date()): Bo
     },
     async getOnboarding() { return d.onboarding ? { ...d.onboarding } : null; },
     async setOnboarding(o) { d.onboarding = { ...o }; },
+    async getWindow() { return d.window ? structuredClone(d.window) : null; },
+    async setWindow(w) { d.window = w ? structuredClone(w) : null; },
     async upsertRules(rules) {
       for (const r of rules) {
         const key = normalise(r.item_name);
@@ -170,5 +173,5 @@ export function demoSeed(): DemoData {
 
 /** A brand-new group: no shops yet, so the bot starts the setup chat. */
 export function newGroupSeed(): DemoData {
-  return { shops: [], rules: [], synonyms: [], members: ["Mom", "Dad", "Bob", "Betty"], items: [], tasks: [], lists: {}, onboarding: null };
+  return { shops: [], rules: [], synonyms: [], members: ["Mom", "Dad", "Bob", "Betty"], items: [], tasks: [], lists: {}, onboarding: null, window: null };
 }

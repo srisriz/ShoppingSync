@@ -4,7 +4,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import type { BotItem, BotShop, BotStore, Onboarding, ParkedInput, QuestionInput } from "../lib/bot/ports";
+import type { BotItem, BotShop, BotStore, ChatWindow, Onboarding, ParkedInput, QuestionInput } from "../lib/bot/ports";
 import type { SummaryItem } from "../lib/info";
 
 const ITEM_COLUMNS = "id, name, item_key, quantity, shop_id, requested_by, status, created_at, bought_at";
@@ -16,6 +16,22 @@ type SentLists = Record<string, { itemIds: string[]; sentAt: string }>;
 function readSentLists(): SentLists {
   try { return existsSync(LISTS_FILE) ? (JSON.parse(readFileSync(LISTS_FILE, "utf8")) as SentLists) : {}; }
   catch { return {}; }
+}
+
+let warned = false;
+function warnNoWindow(message: string) {
+  if (warned) return;
+  warned = true;
+  console.error(`! Context window not saved (${message}). Run supabase/migrations/0010_chat_window.sql.`);
+}
+
+/** Deletes context windows nobody has added to for a while, in every group. */
+export async function clearStaleWindows(db: SupabaseClient, idleMs: number): Promise<number> {
+  const before = new Date(Date.now() - idleMs).toISOString();
+  const { data, error } = await db.from("families").update({ chat_window: null })
+    .not("chat_window", "is", null).lt("chat_window->>lastAt", before).select("id");
+  if (error) return 0;
+  return data?.length ?? 0;
 }
 
 export function supabaseStore(db: SupabaseClient, fid: string): BotStore {
@@ -103,6 +119,16 @@ export function supabaseStore(db: SupabaseClient, fid: string): BotStore {
     },
     async setOnboarding(o) {
       await db.from("families").update({ onboarding: o }).eq("id", fid);
+    },
+    // The context window lives in families.chat_window (migration 0010) and is deleted when it closes.
+    async getWindow() {
+      const { data, error } = await db.from("families").select("chat_window").eq("id", fid).maybeSingle();
+      if (error) { warnNoWindow(error.message); return null; }
+      return (data?.chat_window as ChatWindow | null) ?? null;
+    },
+    async setWindow(w) {
+      const { error } = await db.from("families").update({ chat_window: w }).eq("id", fid);
+      if (error) warnNoWindow(error.message);
     },
     async upsertRules(rules) {
       await db.from("rules").upsert(rules.map((r) => ({ family_id: fid, ...r })), { onConflict: "family_id,item_key" });

@@ -6,7 +6,7 @@
  */
 import type { ParsedAction } from "../parse";
 import type { SynonymPair, MatchRule } from "../matching";
-import type { AiShop, ExtractedActions, PastChoice, Proposal } from "../ai";
+import type { AiShop, ExtractedActions, PastChoice, Proposal, WindowInput, WindowReading } from "../ai";
 import type { SummaryItem } from "../info";
 
 export type BotShop = { id: string; name: string; example_items: string[]; categories: string[]; priority: number; notes: string | null };
@@ -36,7 +36,7 @@ export type IncomingMessage = {
 };
 
 /** A question the bot asked ("Shall I add rice? Reply yes"), waiting for an answer. */
-export type QuestionInput = { actions: ParsedAction[]; preferences: Preference[]; synonyms: SynonymPairInput[]; sender: string; key: unknown };
+export type QuestionInput = { actions: ParsedAction[]; preferences: Preference[]; synonyms: SynonymPairInput[]; sender: string; key: unknown; askedAt?: string };
 /**
  * The setup chat a new group goes through in WhatsApp (see onboarding.ts).
  * step: which question is open; shopIds/index: the shops being asked about in turn;
@@ -51,6 +51,13 @@ export type Onboarding = {
   /** Already re-asked once after an answer that wasn't shops (e.g. "milk"): don't nag again. */
   nudged?: boolean;
 };
+
+/**
+ * The context window: recent messages that weren't a clear action (a question, "No",
+ * half a sentence), read together by the AI. Kept for minutes, then deleted.
+ */
+export type WindowMessage = { id: string; sender: string; text: string; at: string; replyTo: "bot" | "other" | null; toBot: boolean };
+export type ChatWindow = { openedAt: string; lastAt: string; messages: WindowMessage[] };
 
 /** A message saved while the AI was off. */
 export type ParkedInput = { text: string; sender: string; key: unknown };
@@ -77,6 +84,9 @@ export interface BotStore {
   /** The group's setup chat, or null if it never started. */
   getOnboarding(): Promise<Onboarding | null>;
   setOnboarding(o: Onboarding): Promise<void>;
+  /** The open context window, or null. */
+  getWindow(): Promise<ChatWindow | null>;
+  setWindow(w: ChatWindow | null): Promise<void>;
   upsertRules(rules: { item_name: string; shop_id: string; origin: "setup" | "answer" }[]): Promise<void>;
   addSynonym(a: string, b: string): Promise<boolean>;
   /** The AI should look again at these Needs review items (or all unproposed ones). */
@@ -116,6 +126,8 @@ export interface BotAi {
   readShopAnswer(text: string): Promise<{ shops: string[]; items: string[] }>;
   /** Setup chat: a starting guess of what a family buys at a shop. */
   guessShopItems(shop: string): Promise<{ examples: string[]; categories: string[]; confidence: number }>;
+  /** The context window read as one conversation: anything to do, ask, answer or reply. */
+  readWindow(input: WindowInput): Promise<WindowReading>;
 }
 
 /** Shared, long-lived state (one per running bot, across groups). */

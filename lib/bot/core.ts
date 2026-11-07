@@ -9,13 +9,17 @@ import {
   buildSynonymGroups, findFamilyWord, groupList, isKnownItem, normalise, onlyKnownWords, sameItem, splitKnownWords,
   suggestShop, type KnownItems, type SynonymGroups,
 } from "../matching";
-import { tidyShopName, type AiShop, type ExtractedActions } from "../ai";
+import { tidyShopName, type AiShop, type ExtractedActions, type WindowReading } from "../ai";
 import { formatListMessage, isListRequest } from "../format";
+import { addToWindow, closeWindow, currentWindow, looksLikeQuestion, noteBotLine } from "./window";
 import { formatReview, formatSummary, HELP_TEXT, isHelpRequest, isReviewRequest, isSummaryRequest, startOfTodayUk } from "../info";
 import { matchShopName, parseAddShop, parseDone, parseReplace, parseSynonyms, parseTanglishMeans } from "../commands";
 import { planReplace, type ReplaceItem } from "../replace";
 import type { Bot, BotItem, IncomingMessage, Preference, QuestionInput, SynonymPairInput } from "./ports";
-import { handleOnboarding, maybeStartOnboarding } from "./onboarding";
+import { handleOnboarding, maybeStartOnboarding, setupQuestionText } from "./onboarding";
+
+/** "no thanks", "ok cool", "yes please", "nope, all good": a reply, never an item. */
+const CHAT_REPLY = /^(?:no|nope|nah|yes|yeah|yep|yup|ok|okay|sure|cool|great|fine)[\s,!.]*(?:thanks|thank you|thx|cheers|please|pls|worries|problem|all good|it'?s fine|that'?s fine|we'?re (?:fine|good|ok)|mate|then|cool|great)?[\s!.👍🙏]*$/iu;
 
 const QUESTION_TTL_MS = 24 * 3600 * 1000;      // unanswered questions expire after a day
 const BARE_ANSWER_WINDOW_MS = 30 * 60 * 1000;  // a plain "yes" (not a reply) counts for 30 minutes
@@ -42,13 +46,15 @@ export function isCommand(text: string): boolean {
  *  - while the setup chat is open, messages are its answers (see onboarding.ts)
  *  - a group with no shops that was never set up is offered the setup chat afterwards
  */
+/** Adds items for the setup chat (it reports what it added in its own words). */
+const addItemsWith = (bot: Bot) => async (actions: ParsedAction[], msg: IncomingMessage) => {
+  const r = await applyActions(bot, actions, msg.sender, msg.id);
+  if (r.changes > 0) bot.afterChange();
+  return r;
+};
+
 export async function handleMessage(bot: Bot, m: IncomingMessage): Promise<void> {
-  const addItems = async (actions: ParsedAction[], msg: IncomingMessage) => {
-    const r = await applyActions(bot, actions, msg.sender, msg.id);
-    if (r.changes > 0) bot.afterChange();
-    return r;
-  };
-  if (await handleOnboarding(bot, m, addItems)) return;
+  if (await handleOnboarding(bot, m, addItemsWith(bot))) return;
   await handleText(bot, m);
   await maybeStartOnboarding(bot);
 }
@@ -62,7 +68,7 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
   const command = isCommand(text);
   const synonyms = command ? null : await loadSynonyms(bot);
   const ruleReading = command ? null : parseMessageDetailed(text);
-  const plainChat = !!ruleReading && !ruleReading.needsAi && ruleReading.actions.length === 0; // "ok", 👍
+  const plainChat = !!ruleReading && ((!ruleReading.needsAi && ruleReading.actions.length === 0) || CHAT_REPLY.test(text.trim())); // "ok", 👍, "no thanks"
   // A clear list of 2+ items keeps its shape: items are translated one by one, never the whole message.
   let listShape = !!ruleReading && !ruleReading.needsAi && ruleReading.actions.length >= 2 ? ruleReading.actions : null;
   // "pal coffee", "milk eggs bread": split on spaces only when EVERY piece is something the list knows.
@@ -162,18 +168,30 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
   const addShop = parseAddShop(english);
   if (addShop) return handleAddShop(bot, addShop.name, addShop.exampleItems);
   const answer = parseAnswer(english);
+  // "No" while people are talking answers them, not the bot (unless it replies to the bot).
+  if (answer && m.quotedFrom !== "bot" && (await currentWindow(bot))) return readContext(bot, m, english);
   if (answer && (await handleAnswer(bot, answer, sender, m.quotedId))) return;
   const done = parseDone(english);
   if (done) return handleDone(bot, done.shop, m.quotedId, sender);
 
+  // "no thanks", "nope, all good": a reply to someone, never an item.
+  if (!listActions && CHAT_REPLY.test(english.trim())) {
+    if (await currentWindow(bot)) return readContext(bot, m, english);
+    bot.log("(a reply, nothing to do)");
+    return;
+  }
+  // Not a clear action (a question, a sentence): it goes to the context window.
+  if (!listActions && !unsure && parseMessageDetailed(english).needsAi) {
+    bot.log("not a clear action: into the context window");
+    return readContext(bot, m, english);
+  }
   const reading: Reading = listActions
     ? { actions: listActions, preferences: [], fromAi: false }
     : await readMessage(bot, english);
   if (reading.parked) return parkMessage(bot, m);
   if (reading.fromAi || unsure) {
-    // the AI's reading (or an unsure translation) is confirmed first
-    const asked = await askToConfirm(bot, m, reading, unsure ? english : undefined);
-    if (!asked) await maybeChatReply(bot, m);
+    // an unsure translation is confirmed first
+    await askToConfirm(bot, m, reading, unsure ? english : undefined);
     return;
   }
   // "almond flour from Costco": a shop the family already has is used straight away;
@@ -185,7 +203,11 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
     await bot.chat.send(result.summary, m);
   }
   if (unknownShop.length) await askToConfirm(bot, m, { actions: unknownShop, preferences: [] });
-  else if (!result.summary) await maybeChatReply(bot, m);
+  else if (!result.summary && result.changes === 0) {
+    // A question opens the context window; "ok", "lol", "No" join one that's already open.
+    if (looksLikeQuestion(english) || (await currentWindow(bot))) await readContext(bot, m, english);
+    else bot.log("(nothing to do)");
+  }
   if (result.changes > 0) bot.afterChange();
 }
 
@@ -309,43 +331,85 @@ async function readMessage(bot: Bot, text: string): Promise<Reading> {
 // ---------------------------------------------------------------------------
 // Messages that aren't shopping actions
 
-const ROLES = ["amma", "appa", "mum", "mummy", "mom", "dad", "daddy", "papa", "paati", "thatha", "nani", "dadi", "nana",
-  "anna", "akka", "thambi", "thangachi", "bhaiya", "didi", "aunty", "uncle"];
-
-/** A short reply, only when the question is for the bot (or anyone) and the AI is the right source. */
-async function maybeChatReply(bot: Bot, m: IncomingMessage): Promise<void> {
-  if (!bot.state.aiReady) {
-    bot.log("(nothing to add)");
-    return;
-  }
-  const toBot = m.quotedFrom === "bot" || m.mentionsBot || /\b(?:shoppingsync|shopping\s*sync|bot)\b/i.test(m.text);
-  if (m.quotedFrom === "other") {
-    bot.log("(a reply to someone else's message; not answering)");
-    return;
-  }
-  if (m.mentionsOthers && !m.mentionsBot) {
-    bot.log("(mentions someone else; not answering)");
-    return;
-  }
-  const members = await bot.store.members();
-  const firstWord = normalise(m.text.split(/[\s,:!?]+/)[0] ?? "");
-  const namesPerson = !!firstWord && (ROLES.includes(firstWord) || members.some((n) => normalise(n.split(/\s+/)[0]) === firstWord));
-  if (namesPerson && !toBot) {
-    bot.log("(addressed to a family member; not answering)");
-    return;
-  }
+/**
+ * Adds the message to the context window and has the AI read the window as one
+ * conversation. Whatever it finds is asked about first (never acted on directly);
+ * a question about the list is answered from the list itself.
+ */
+async function readContext(bot: Bot, m: IncomingMessage, english: string): Promise<void> {
+  if (!bot.state.aiReady) return parkMessage(bot, m);
+  const w = await addToWindow(bot, {
+    id: m.id, sender: m.sender, text: english === m.text ? m.text : `${m.text} (in English: ${english})`, at: bot.now().toISOString(),
+    replyTo: m.quotedFrom, toBot: m.quotedFrom === "bot" || m.mentionsBot || /\b(?:shoppingsync|shopping\s*sync)\b/i.test(m.text),
+  });
+  bot.log(`context window: ${w.messages.length} message${w.messages.length === 1 ? "" : "s"}; asking the AI`);
+  const [members, shops, needed, setupQuestion] = await Promise.all([
+    bot.store.members(), bot.store.shops(), bot.store.neededItems(), setupQuestionText(bot),
+  ]);
+  const shopName = new Map(shops.map((s) => [s.id, s.name]));
+  let r: WindowReading;
   try {
-    const text = await bot.ai.chatReply(m.text, m.sender, { members, toBot });
-    if (!text) {
-      bot.log("(nothing to add; not one for the bot)");
-      return;
-    }
-    await reply(bot);
-    await bot.chat.send(text, m);
-    bot.log(`💬 replied`);
+    r = await bot.ai.readWindow({
+      messages: w.messages.map((x) => ({
+        from: x.sender, text: x.text, to_bot: x.toBot,
+        replies_to: x.replyTo === "bot" ? "the bot" : x.replyTo === "other" ? "someone else" : null,
+      })),
+      members,
+      setup_question: setupQuestion,
+      list: needed.map((i) => ({ item: i.name, shop: (i.shop_id && shopName.get(i.shop_id)) || "Needs review" })),
+    });
   } catch (err) {
-    bot.log(`chat reply failed: ${err instanceof Error ? err.message : err}`);
+    bot.state.aiReady = false;
+    bot.log(`AI unavailable: ${err instanceof Error ? err.message : err}`);
+    return parkMessage(bot, m);
   }
+  const actions = toActions(r);
+  const said = [
+    ...actions.map((a) => `${a.kind} ${a.name}`), ...r.preferences.map((p) => `prefer ${p.item} at ${p.shop}`),
+    ...(r.list_question ? [`asks about ${r.list_question}`] : []),
+    ...(r.setup_answer.kind !== "none" ? [`setup answer: ${r.setup_answer.kind} ${r.setup_answer.names.join(", ")}`] : []),
+    ...(r.reply ? ["a reply"] : []),
+  ];
+  bot.log(`AI read the window: ${said.length ? said.join("; ") : "nothing to do yet"}`);
+
+  const setup = r.setup_answer;
+  if (setupQuestion && (setup.kind === "skip" || ((setup.kind === "shops" || setup.kind === "items") && setup.names.length))) {
+    await closeWindow(bot, "an answer to the setup question");
+    const text = setup.kind === "skip" ? "skip" : setup.names.join(", ");
+    await handleOnboarding(bot, { ...m, text, quotedFrom: "bot", mentionsBot: true }, addItemsWith(bot));
+    return;
+  }
+  if (actions.length || r.preferences.length) {
+    await askToConfirm(bot, m, { actions, preferences: r.preferences }); // closes the window
+    return;
+  }
+  const text = r.list_question ? await answerFromList(bot, r.list_question) : r.reply;
+  if (!text) {
+    bot.log("(nothing to do yet; the window stays open)");
+    return;
+  }
+  await reply(bot);
+  await bot.chat.send(text, m);
+  await noteBotLine(bot, text);
+  bot.log(r.list_question ? "💬 answered from the list" : "💬 replied");
+}
+
+/** "do we have eggs?": what the list knows about it. Never claims to know what's at home. */
+async function answerFromList(bot: Bot, item: string): Promise<string> {
+  const groups = await loadSynonyms(bot);
+  const key = normalise(item);
+  const same = (name: string, k: string) => sameItem(k, key, groups) || sameItem(normalise(name), key, groups);
+  const [shops, needed] = await Promise.all([bot.store.shops(), bot.store.neededItems()]);
+  const onList = needed.find((i) => same(i.name, i.item_key));
+  if (onList) {
+    const shop = shops.find((s) => s.id === onList.shop_id)?.name;
+    const who = onList.requested_by[0] ? `, added by ${onList.requested_by[0]}` : "";
+    return `🛒 *${onList.name}* is on the list${shop ? ` under ${shop}` : " (needs review)"}${who} ${whenSaid(onList.created_at, bot.now())}.`;
+  }
+  const since = new Date(bot.now().getTime() - 7 * 24 * 3600 * 1000).toISOString();
+  const got = (await bot.store.recentlyBought(since)).find((i) => same(i.name, i.item_key));
+  if (got) return `✅ *${got.name}* was ticked off${got.bought_by ? ` by ${got.bought_by}` : ""} ${whenSaid(got.bought_at, bot.now())}.`;
+  return `*${item}* isn't on the list. Send *${item}* to add it.`;
 }
 
 /** Saves the message for later and lets the group know. Nothing is guessed while the AI is off. */
@@ -384,6 +448,8 @@ async function askToConfirm(
     bot.log("(nothing to add)");
     return false;
   }
+  // The bot is asking now, so the conversation so far is done with.
+  await closeWindow(bot, "the bot asked a question");
   const shops = await bot.store.shops();
   const label = (a: ParsedAction) => bold(a.name) + (a.kind === "add" && a.quantity ? ` (${a.quantity})` : "");
 
@@ -447,7 +513,7 @@ async function askToConfirm(
   await reply(bot);
   const sentId = await bot.chat.send(text);
   if (!sentId) return false;
-  const input: QuestionInput = { actions, preferences, synonyms: synonymPairs, sender: original.sender, key: original.ref };
+  const input: QuestionInput = { actions, preferences, synonyms: synonymPairs, sender: original.sender, key: original.ref, askedAt: bot.now().toISOString() };
   await bot.store.addQuestion(sentId, input);
   bot.log(`? asked the group to confirm: ${lines.join("; ")}`);
   return true;

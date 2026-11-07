@@ -59,5 +59,6 @@ export function demoAi(data: DemoData, mode: () => AiMode, note: Note, onFallbac
     readList: (kind, text) => ask("readList", { kind, text }, () => brain.readList(kind, text)),
     readShopAnswer: (text) => ask("readShopAnswer", { text }, () => ({ shops: brain.readList("shops", text), items: [] })),
     guessShopItems: (shop) => ask("guessShopItems", { shop }, () => brain.guessShopItems(shop)),
+    readWindow: (input) => ask("readWindow", { input }, () => brain.readWindow(input, known())),
   };
 }

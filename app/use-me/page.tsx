@@ -168,7 +168,7 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
           <div className="um-privacy">
             <h2>Your privacy</h2>
             <ul className="um-list">
-              <li><strong>Your shopping list is kept, your chat isn&apos;t.</strong> Ordinary chat is ignored and never saved. Shopping messages the bot needs to check with you, or park for later, are kept with your list so it can finish the job.</li>
+              <li><strong>Your shopping list is kept, your chat isn&apos;t.</strong> Clear messages like <q>milk</q> are handled and not kept. When something needs the conversation around it (a question, a <q>No</q>), the last few messages are held for up to 5 minutes so the bot can follow along, then deleted. Shopping messages it needs to check with you, or park for later, are kept with your list so it can finish the job.</li>
               <li><strong>Your list is private.</strong> Only your group&apos;s login can see it.</li>
               <li><strong>The AI runs on a private computer,</strong> not a public AI service. If you see 😴 it&apos;s offline; your message waits and is handled when it&apos;s back.</li>
               <li><strong>You&apos;re in control.</strong> Remove the bot from the group and it stops reading straight away.</li>
@@ -224,6 +224,7 @@ const COMMANDS: { title: string; items: [string, string][] }[] = [
   ] },
   { title: "Tick off", items: [
     ["got milk", "Ticks off one item. If someone already did, it says who and when."],
+    ["do we have eggs?", "Says what the list shows: on it, ticked off by whom, or not there. If someone answers \"No\", it offers to add eggs."],
     ["done Tesco", "Ticks off everything from that shop."],
     ["Done", "Sent as a reply to a list, ticks off everything on it."],
   ] },

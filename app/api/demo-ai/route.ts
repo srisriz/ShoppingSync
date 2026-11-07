@@ -4,7 +4,7 @@
  * can't be used as a general-purpose AI. The demo falls back to its built-in
  * stand-in whenever this isn't available.
  */
-import { chatReply, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, toEnglish, type AiShop } from "@/lib/ai";
+import { chatReply, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, readWindow, toEnglish, type AiShop, type WindowInput } from "@/lib/ai";
 import { GROQ_MODEL, groqConfigured, groqJson } from "@/lib/ai-groq";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +72,21 @@ export async function POST(req: Request) {
       case "readShopAnswer":
         result = await readShopAnswer(str(a.text), groqJson);
         break;
+      case "readWindow": {
+        const w = (a.input ?? {}) as Record<string, unknown>;
+        const input: WindowInput = {
+          messages: (Array.isArray(w.messages) ? w.messages : []).slice(-12).map((m: Record<string, unknown>) => ({
+            from: str(m.from, 40), text: str(m.text),
+            replies_to: m.replies_to === "the bot" ? "the bot" : m.replies_to === "someone else" ? "someone else" : null,
+            to_bot: !!m.to_bot,
+          })),
+          members: strs(w.members, 12, 40),
+          setup_question: w.setup_question ? str(w.setup_question, 200) : null,
+          list: (Array.isArray(w.list) ? w.list : []).slice(0, 60).map((i: Record<string, unknown>) => ({ item: str(i.item, 60), shop: str(i.shop, 40) })),
+        };
+        result = await readWindow(input, groqJson);
+        break;
+      }
       case "guessShopItems":
         result = await guessShopItems(str(a.shop, 40), groqJson);
         break;

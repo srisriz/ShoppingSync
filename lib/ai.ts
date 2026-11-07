@@ -397,3 +397,88 @@ export async function readShopAnswer(message: string, llm: JsonLlm = ollamaJson)
   const clean = (xs: unknown[] | undefined) => (xs ?? []).map((x) => String(x ?? "").trim().slice(0, 40)).filter(Boolean).slice(0, 12);
   return { shops: clean(out.shops), items: clean(out.items) };
 }
+
+// ---------------------------------------------------------------------------
+// The context window: several messages read as one conversation
+
+export type WindowInput = {
+  /** Oldest first; the last one is new. from "ShoppingSync" is the bot itself. */
+  messages: { from: string; text: string; replies_to: "the bot" | "someone else" | null; to_bot: boolean }[];
+  members: string[];
+  /** The setup question the bot is waiting on, if any ("Which shops do you usually buy from?"). */
+  setup_question: string | null;
+  /** What's on the list now. */
+  list: { item: string; shop: string }[];
+};
+
+export type WindowReading = {
+  add: { name: string; quantity: string | null; shop?: string | null }[];
+  bought: string[];
+  remove: string[];
+  preferences: { item: string; shop: string }[];
+  /** An item someone asked about ("do we have eggs?"), for the bot to answer from the list. */
+  list_question: string | null;
+  /** An answer to the setup question. */
+  setup_answer: { kind: "shops" | "items" | "skip" | "none"; names: string[] };
+  /** A short reply to a general question meant for the bot or the group, else "". */
+  reply: string;
+};
+
+const WINDOW_PROMPT = [
+  "You read a short stretch of a UK family's WhatsApp group, oldest message first. The LAST message is new;",
+  "earlier ones are context. ShoppingSync (the bot) keeps the family's shopping list. Messages from ShoppingSync are the bot's own.",
+  "Read the conversation as people would: who is answering whom. A short reply like \"No\" or \"yes\" answers the most recent",
+  "question it fits, usually one a family member asked, not the bot.",
+  "Work out what the NEW message, read with the context, means for the shopping list. Never repeat something an earlier",
+  "message already settled.",
+  "add: things the family now needs. Example: \"do we have eggs?\" then \"No\" -> add eggs. \"any milk left?\" then",
+  "\"nope, we're out\" -> add milk. \"rice is over\" -> add rice. Do NOT add when the answer is yes, unclear, or the item is",
+  "already in list. shop on an add only when a shop is named for this trip, else null. quantity like \"2\" or \"500g\", else null.",
+  "bought: things someone says they bought or picked up. remove: things no longer needed.",
+  "preferences: only when someone says where an item is better or should always be bought.",
+  "list_question: when the NEW message asks whether the family has, needs or has bought an item (\"do we have eggs?\",",
+  "\"is milk on the list?\", \"did anyone get bread?\"), that item, so the bot can say what the list shows. Else null.",
+  "setup_answer: only when setup_question is given and the NEW message answers that question (said to the bot or the",
+  "whole group, not answering a family member): kind \"shops\" or \"items\" with the names listed, or \"skip\" if they",
+  "decline it. A \"No\" that answers a family member is NOT a setup answer. Otherwise kind \"none\" with no names.",
+  "reply: only when the NEW message is a general question for the bot or for anyone that general knowledge answers",
+  "(the time somewhere, a simple fact, how to use the list); at most two short sentences. Empty for questions about the",
+  "list (list_question covers those), for anything only the family knows, for chat between family members,",
+  "and for acknowledgements. When in doubt, leave everything empty.",
+  "Use short, plain item names as a shopper would write them. Never invent items.",
+].join(" ");
+
+export async function readWindow(input: WindowInput, llm: JsonLlm = ollamaJson): Promise<WindowReading> {
+  const names = { type: "array", items: { type: "string" } };
+  const out = (await llm({
+    system: WINDOW_PROMPT,
+    user: JSON.stringify(input),
+    schema: {
+      type: "object",
+      properties: {
+        add: { type: "array", items: { type: "object", properties: { name: { type: "string" }, quantity: { type: ["string", "null"] }, shop: { type: ["string", "null"] } }, required: ["name", "quantity", "shop"] } },
+        bought: names,
+        remove: names,
+        preferences: { type: "array", items: { type: "object", properties: { item: { type: "string" }, shop: { type: "string" } }, required: ["item", "shop"] } },
+        list_question: { type: ["string", "null"] },
+        setup_answer: { type: "object", properties: { kind: { type: "string", enum: ["shops", "items", "skip", "none"] }, names }, required: ["kind", "names"] },
+        reply: { type: "string" },
+      },
+      required: ["add", "bought", "remove", "preferences", "list_question", "setup_answer", "reply"],
+    },
+    temperature: 0.1,
+  })) as Partial<WindowReading>;
+  const strs = (x: unknown) => (Array.isArray(x) ? x : []).map((v) => String(v ?? "").trim()).filter(Boolean).slice(0, 20);
+  const kind = out.setup_answer?.kind;
+  return {
+    add: (Array.isArray(out.add) ? out.add : []).filter((a) => a && String(a.name ?? "").trim())
+      .map((a) => ({ name: String(a.name).trim(), quantity: a.quantity ? String(a.quantity) : null, shop: a.shop ? String(a.shop) : null })).slice(0, 20),
+    bought: strs(out.bought),
+    remove: strs(out.remove),
+    preferences: (Array.isArray(out.preferences) ? out.preferences : []).filter((p) => p?.item && p?.shop)
+      .map((p) => ({ item: String(p.item), shop: String(p.shop) })).slice(0, 10),
+    list_question: out.list_question ? String(out.list_question).trim() || null : null,
+    setup_answer: { kind: kind === "shops" || kind === "items" || kind === "skip" ? kind : "none", names: strs(out.setup_answer?.names) },
+    reply: String(out.reply ?? "").trim().slice(0, 300),
+  };
+}

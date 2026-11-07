@@ -17,7 +17,8 @@
  */
 import { parseMessage, parseMessageDetailed, type ParsedAction } from "../parse";
 import { buildSynonymGroups, normalise, suggestShop } from "../matching";
-import { isShopName, looksLikeItem, splitShopsAndItems } from "../lexicon";
+import { currentWindow } from "./window";
+import { isShopName, splitShopsAndItems } from "../lexicon";
 import { tidyShopName } from "../ai";
 import { isListRequest } from "../format";
 import { isHelpRequest, isReviewRequest, isSummaryRequest } from "../info";
@@ -61,9 +62,53 @@ export async function handleOnboarding(bot: Bot, m: IncomingMessage, addItems: A
     bot.log("setup chat: no answer for a day, so it ended quietly");
     return false;
   }
+  return routeAnswer(bot, ob, m, addItems);
+}
+
+/** The setup question the bot is waiting on, for the context window's AI. */
+export async function setupQuestionText(bot: Bot): Promise<string | null> {
+  const ob = await bot.store.getOnboarding();
+  if (!ob || ob.step === "done") return null;
+  if (ob.step === "shops") return "Which shops do you usually buy from?";
+  if (ob.step === "items") {
+    const shop = (await bot.store.shops()).find((s) => s.id === ob.shopIds[ob.index]);
+    return shop ? `What do you usually buy at ${shop.name}?` : null;
+  }
+  return null;
+}
+
+/** "no", "yes", "nope, we're out", "yeah I think so": a reply that only makes sense next to a question. */
+const BARE_REPLY = /^(?:no|nope|nah|not really|yes|yeah|yep|yup|ok|okay|sure)\b|^(?:n|y|👍|👎)[\s.!]*$/iu;
+
+async function routeAnswer(bot: Bot, ob: Onboarding, m: IncomingMessage, addItems: AddItems): Promise<boolean> {
   if (isListRequest(m.text) || isHelpRequest(m.text) || isSummaryRequest(m.text) || isReviewRequest(m.text)) return false;
 
   const text = m.text.trim();
+  // A reply to someone else's message is part of their conversation.
+  if (m.quotedFrom === "other") {
+    bot.log("setup chat: a reply to someone else's message, not an answer");
+    return false;
+  }
+  // A question is someone talking ("do you have eggs?"), never an answer.
+  if (isQuestion(text)) {
+    bot.log("setup chat: a question, not an answer; the context window reads it");
+    return false;
+  }
+  // "No" while people are talking: the context window works out whom it answers.
+  const toBot = m.quotedFrom === "bot" || m.mentionsBot;
+  if (!toBot && BARE_REPLY.test(text) && (await currentWindow(bot))) {
+    bot.log("setup chat: a yes/no in the middle of a conversation; the context window reads it");
+    return false;
+  }
+  // A bare yes/no belongs to the bot's newest question: if it asked something else after the
+  // setup question ("Shall I add eggs?"), that question gets the answer.
+  if (!m.quotedId && (YES.test(text) || SKIP.test(text))) {
+    const newer = (await bot.store.openQuestions(null, 30 * 60 * 1000)).some((q) => (q.input.askedAt ?? "") > ob.askedAt);
+    if (newer) {
+      bot.log("setup chat: the bot asked something newer; this yes/no answers that");
+      return false;
+    }
+  }
   if (STOP.test(text)) {
     await bot.store.setOnboarding({ ...ob, step: "done" });
     await bot.pause(600, 1200);
@@ -119,21 +164,20 @@ const QUESTION_START = /^(?:(?:hey|hi|hello|ok|oh|so|um+)[\s,!]+)*(?:do|does|did
 /** Words that never appear in a shop's name, so "Hey Do" or "Have Eggs" isn't taken as one. */
 const NOT_SHOP_WORDS = new Set(["hey", "hi", "hello", "do", "does", "did", "we", "you", "i", "me", "us", "have", "has", "had",
   "is", "are", "was", "were", "can", "could", "should", "will", "would", "need", "needs", "got", "get", "buy", "any", "anyone",
-  "what", "where", "when", "who", "why", "how", "please", "pls", "thanks", "ok", "okay", "yes", "no"]);
+  "what", "where", "when", "who", "why", "how", "please", "pls", "thanks", "ok", "okay", "yes", "no", "nope", "nah", "yeah", "yep", "we're", "'re", "out", "left", "lunch", "home"]);
 export function plausibleShopName(name: string): boolean {
   if (isShopName(name)) return true;
   const words = name.toLowerCase().replace(/[^\p{L}\p{N}'&\s-]/gu, " ").split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length <= 4 && !words.some((w) => NOT_SHOP_WORDS.has(w));
 }
 
-async function readShopsReply(bot: Bot, text: string): Promise<{ shops: string[]; items: ParsedAction[] } | null> {
+/** "Hey, do we have eggs?" or "we have eggs?" is a question; "Tesco?" is still an answer. */
+export function isQuestion(text: string): boolean {
   const t = text.trim();
-  // "Tesco?" is still an answer; "we have eggs?" isn't.
-  const asks = QUESTION_START.test(t) || (/\?\s*$/.test(t) && t.toLowerCase().split(/[^\p{L}']+/u).some((w) => NOT_SHOP_WORDS.has(w)));
-  if (asks) {
-    bot.log("setup chat: a question, not an answer to which shops");
-    return null;
-  }
+  return QUESTION_START.test(t) || (/\?\s*$/.test(t) && t.toLowerCase().split(/[^\p{L}']+/u).some((w) => NOT_SHOP_WORDS.has(w)));
+}
+
+async function readShopsReply(bot: Bot, text: string): Promise<{ shops: string[]; items: ParsedAction[] } | null> {
   const known = await knownItems(bot);
   const reading = parseMessageDetailed(text);
   if (!reading.needsAi) {
@@ -143,19 +187,11 @@ async function readShopsReply(bot: Bot, text: string): Promise<{ shops: string[]
     bot.log(`rules read: shops ${split.shops.join(", ") || "none"}; items ${split.items.join(", ") || "none"}`);
     return { shops: split.shops, items: reading.actions.filter((a) => split.items.includes(a.name)) };
   }
+  // A sentence ("we mostly go to Tesco and the Indian shop"): the context window's AI reads it
+  // with the conversation around it, and hands the shops back to the setup chat.
   if (bot.state.aiReady) {
-    try {
-      const r = await bot.ai.readShopAnswer(text);
-      // A "shop" that is plainly an item ("milk") is an item, whatever the AI said.
-      const shops = r.shops.filter((n) => isShopName(n) || !looksLikeItem(n, known.names, known.groups));
-      const items = [...r.items, ...r.shops.filter((n) => !shops.includes(n))];
-      bot.log(`AI read: shops ${shops.join(", ") || "none"}; items ${items.join(", ") || "none"}`);
-      // Tidy each item the usual way ("we need paal" -> "paal", "2 loaves of bread" -> bread, 2 loaves).
-      return { shops, items: items.flatMap((name) => parseMessage(name).filter((x) => x.kind === "add")) };
-    } catch (err) {
-      bot.state.aiReady = false;
-      bot.log(`AI unavailable: ${err instanceof Error ? err.message : err}`);
-    }
+    bot.log("setup chat: a sentence; the context window reads it");
+    return null;
   }
   const names = parseMessage(text.replace(/\b(?:we|usually|mostly|normally|go to|shop at|buy from|sometimes|and also|also|need|needs)\b/gi, ",")).map((a) => a.name);
   const split = splitShopsAndItems(names, known.names, known.groups);

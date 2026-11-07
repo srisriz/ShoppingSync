@@ -32,11 +32,12 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { createClient } from "@supabase/supabase-js";
 import { normalise } from "../lib/matching";
-import { chatReply, checkOllama, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, toEnglish } from "../lib/ai";
+import { chatReply, checkOllama, extractActions, guessShopItems, proposeShop, readList, readShopAnswer, readWindow, toEnglish } from "../lib/ai";
 import { generateToken, looksLikeCode, normaliseCode, sha256Hex } from "../lib/codes";
 import { handleMessage, maybeStartOnboarding, processQueuedMessages, proposeForReviewItems } from "../lib/bot/core";
 import type { Bot, BotAi, BotChat, BotState, IncomingMessage } from "../lib/bot/ports";
-import { supabaseStore } from "./bot-supabase";
+import { clearStaleWindows, supabaseStore } from "./bot-supabase";
+import { WINDOW_IDLE_MS } from "../lib/bot/window";
 
 // Optional: links an existing family (set up before multi-group) to its WhatsApp group by name.
 const LEGACY_GROUP_NAME = (process.env.WHATSAPP_GROUP_NAME ?? "").trim();
@@ -114,6 +115,7 @@ const ollama: BotAi = {
   readList: (kind, text) => readList(kind, text),
   readShopAnswer: (text) => readShopAnswer(text),
   guessShopItems: (shop) => guessShopItems(shop),
+  readWindow: (input) => readWindow(input),
 };
 
 /**
@@ -627,6 +629,11 @@ async function startAiWorker(): Promise<void> {
   setInterval(() => enqueue(leaveExpiredGroups), 10 * 60_000);
   // Invites created after the bot joined a group: switch those groups on.
   setInterval(() => enqueue(activateInvitedGroups), 2 * 60_000);
+  // Context windows left quiet for 5 minutes are deleted, so chat isn't kept.
+  setInterval(async () => {
+    const n = await clearStaleWindows(db, WINDOW_IDLE_MS);
+    if (n) console.log(`  · deleted ${n} quiet context window${n === 1 ? "" : "s"}`);
+  }, 60_000);
 }
 
 startAiWorker().then(connect).catch((err) => {

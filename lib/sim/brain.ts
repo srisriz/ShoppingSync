@@ -4,7 +4,7 @@
  * The demo runs in the browser with no AI, so this small, predictable reader
  * plays that part: same inputs, same output shapes as lib/ai.ts.
  */
-import { tidyShopName, type ExtractedActions } from "../ai";
+import { tidyShopName, type ExtractedActions, type WindowInput, type WindowReading } from "../ai";
 import { normalise, itemVariants, spellingKey } from "../matching";
 import { splitByShop } from "../parse";
 
@@ -268,4 +268,59 @@ const SHOP_GUESSES: [RegExp, string[], string[]][] = [
 export function guessShopItems(shop: string): { examples: string[]; categories: string[]; confidence: number } {
   const hit = SHOP_GUESSES.find(([re]) => re.test(shop));
   return hit ? { examples: hit[1], categories: hit[2], confidence: 0.75 } : { examples: [], categories: [], confidence: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Context window (stands in for readWindow)
+
+/** "do we have eggs?", "any milk left?", "is bread on the list?", "did anyone get rice?" -> the item. */
+function itemAsked(text: string): string | null {
+  const t = toEnglish(text).english.trim().replace(/^(?:hey|hi|ok|so|um+)[\s,!]+/i, "");
+  const m =
+    t.match(/^(?:do|did|have)\s+(?:we|you|u)\s+(?:still\s+)?(?:have|got|need)\s+(?:any\s+|some\s+|enough\s+)?(.+?)[\s?!.]*$/i) ??
+    t.match(/^(?:is|are)\s+there\s+(?:any\s+|some\s+)?(.+?)(?:\s+(?:left|at home|in the fridge))?[\s?!.]*$/i) ??
+    t.match(/^any\s+(.+?)\s+left[\s?!.]*$/i) ??
+    t.match(/^(?:is|are)\s+(?:the\s+)?(.+?)\s+on\s+the\s+list[\s?!.]*$/i) ??
+    t.match(/^did\s+(?:anyone|anybody|someone|you)\s+(?:get|buy|pick up|grab)\s+(?:the\s+|some\s+)?(.+?)[\s?!.]*$/i);
+  const item = m?.[1]?.replace(/\s+(?:left|at home|in the fridge|already)$/i, "").trim();
+  return item && item.split(/\s+/).length <= 3 ? item : null;
+}
+const SAYS_NO = /^(?:no|nope|nah|not really|none|we'?re out|all gone|finished|it'?s finished|over)\b/i;
+const SAYS_YES = /^(?:yes|yeah|yep|yup|we do|plenty|loads|there'?s some)\b/i;
+
+export function readWindow(input: WindowInput, known: string[] = []): WindowReading {
+  const r: WindowReading = { add: [], bought: [], remove: [], preferences: [], list_question: null, setup_answer: { kind: "none", names: [] }, reply: "" };
+  const last = input.messages.at(-1);
+  if (!last) return r;
+  const text = last.text.replace(/\s*\(in English: .*\)$/, "");
+  const english = toEnglish(text).english.trim();
+
+  const asked = itemAsked(text);
+  if (asked) { r.list_question = asked; return r; }
+
+  if (SAYS_NO.test(english) || SAYS_YES.test(english)) {
+    // A short answer to the latest question a family member asked about an item.
+    const earlier = [...input.messages.slice(0, -1)].reverse().find((m) => m.from !== "ShoppingSync" && m.from !== last.from && itemAsked(m.text));
+    if (earlier && last.replies_to !== "the bot") {
+      const item = itemAsked(earlier.text)!;
+      const listed = input.list.some((i) => normalise(i.item) === normalise(item));
+      if (SAYS_NO.test(english) && !listed) r.add.push({ name: item, quantity: null, shop: null });
+      return r;
+    }
+    if (input.setup_question && /^(?:no|nope|nah|not really|none)[\s.!]*$/i.test(english)) r.setup_answer = { kind: "skip", names: [] };
+    return r;
+  }
+
+  if (input.setup_question) {
+    const kind = /\bshops\b/i.test(input.setup_question) ? "shops" : "items";
+    const names = readList(kind, text);
+    if (names.length) { r.setup_answer = { kind, names }; return r; }
+  }
+
+  const ex = extractActions(english, known);
+  Object.assign(r, { add: ex.add, bought: ex.bought, remove: ex.remove, preferences: ex.preferences });
+  if (!ex.add.length && !ex.bought.length && !ex.remove.length && !ex.preferences.length) {
+    r.reply = chatReply(text, { toBot: last.to_bot });
+  }
+  return r;
 }
