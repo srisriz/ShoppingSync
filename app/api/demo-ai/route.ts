@@ -83,6 +83,9 @@ export async function POST(req: Request) {
           members: strs(w.members, 12, 40),
           setup_question: w.setup_question ? str(w.setup_question, 200) : null,
           list: (Array.isArray(w.list) ? w.list : []).slice(0, 60).map((i: Record<string, unknown>) => ({ item: str(i.item, 60), shop: str(i.shop, 40) })),
+          unanswered_questions: (Array.isArray(w.unanswered_questions) ? w.unanswered_questions : []).slice(0, 5).map((q: Record<string, unknown>) => ({
+            id: str(q.id, 80), from: str(q.from, 40), text: str(q.text), asked: str(q.asked, 40),
+          })),
         };
         result = await readWindow(input, groqJson);
         break;

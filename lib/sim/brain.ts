@@ -288,23 +288,36 @@ function itemAsked(text: string): string | null {
 const SAYS_NO = /^(?:no|nope|nah|not really|none|we'?re out|all gone|finished|it'?s finished|over)\b/i;
 const SAYS_YES = /^(?:yes|yeah|yep|yup|we do|plenty|loads|there'?s some)\b/i;
 
+const HOLDING = /^(?:i\s+)?(?:need to|have to|will|'ll|gotta|let me|lemme)?\s*(?:check|look|see)\b|^(?:not sure|dunno|don'?t know|one sec|hang on|wait)\b/i;
+const NO_ITEM = /^(?:no|no more|zero)\s+(.+?)[\s.!]*$|^(?:we'?re\s+)?out of\s+(.+?)[\s.!]*$|^(.+?)\s+(?:is|are)\s+(?:finished|over|gone)[\s.!]*$/i;
+
 export function readWindow(input: WindowInput, known: string[] = []): WindowReading {
-  const r: WindowReading = { add: [], bought: [], remove: [], preferences: [], list_question: null, setup_answer: { kind: "none", names: [] }, reply: "" };
+  const r: WindowReading = { add: [], bought: [], remove: [], preferences: [], list_question: null, setup_answer: { kind: "none", names: [] }, reply: "", answered: [], track_question: false };
   const last = input.messages.at(-1);
   if (!last) return r;
   const text = last.text.replace(/\s*\(in English: .*\)$/, "");
   const english = toEnglish(text).english.trim();
+  const listed = (item: string) => input.list.some((i) => normalise(i.item) === normalise(item));
+  const needIt = (item: string) => { if (!listed(item)) r.add.push({ name: item, quantity: null, shop: null }); };
 
   const asked = itemAsked(text);
-  if (asked) { r.list_question = asked; return r; }
+  if (asked) { r.list_question = asked; r.track_question = true; return r; }
+  if (HOLDING.test(english)) return r;
 
+  // The latest unanswered question about an item, asked by someone else.
+  const open = [...input.unanswered_questions].reverse().find((q) => q.from !== last.from && itemAsked(q.text));
+  const no = english.match(NO_ITEM);
+  if (no) {
+    const item = (no[1] ?? no[2] ?? no[3]).trim();
+    needIt(item);
+    const q = [...input.unanswered_questions].reverse().find((x) => normalise(itemAsked(x.text) ?? "") === normalise(item));
+    if (q) r.answered.push(q.id);
+    return r;
+  }
   if (SAYS_NO.test(english) || SAYS_YES.test(english)) {
-    // A short answer to the latest question a family member asked about an item.
-    const earlier = [...input.messages.slice(0, -1)].reverse().find((m) => m.from !== "ShoppingSync" && m.from !== last.from && itemAsked(m.text));
-    if (earlier && last.replies_to !== "the bot") {
-      const item = itemAsked(earlier.text)!;
-      const listed = input.list.some((i) => normalise(i.item) === normalise(item));
-      if (SAYS_NO.test(english) && !listed) r.add.push({ name: item, quantity: null, shop: null });
+    if (open && last.replies_to !== "the bot") {
+      if (SAYS_NO.test(english)) needIt(itemAsked(open.text)!);
+      r.answered.push(open.id);
       return r;
     }
     if (input.setup_question && /^(?:no|nope|nah|not really|none)[\s.!]*$/i.test(english)) r.setup_answer = { kind: "skip", names: [] };

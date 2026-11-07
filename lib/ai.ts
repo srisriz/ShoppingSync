@@ -409,6 +409,8 @@ export type WindowInput = {
   setup_question: string | null;
   /** What's on the list now. */
   list: { item: string; shop: string }[];
+  /** Questions nobody has answered yet, possibly asked a while ago. */
+  unanswered_questions: { id: string; from: string; text: string; asked: string }[];
 };
 
 export type WindowReading = {
@@ -422,6 +424,10 @@ export type WindowReading = {
   setup_answer: { kind: "shops" | "items" | "skip" | "none"; names: string[] };
   /** A short reply to a general question meant for the bot or the group, else "". */
   reply: string;
+  /** Ids of unanswered_questions the new message answers. */
+  answered: string[];
+  /** The new message is a shopping question (have/need/bought) nobody has answered yet: keep it. */
+  track_question: boolean;
 };
 
 const WINDOW_PROMPT = [
@@ -445,6 +451,16 @@ const WINDOW_PROMPT = [
   "(the time somewhere, a simple fact, how to use the list); at most two short sentences. Empty for questions about the",
   "list (list_question covers those), for anything only the family knows, for chat between family members,",
   "and for acknowledgements. When in doubt, leave everything empty.",
+  "unanswered_questions are questions from earlier (maybe much earlier) that nobody has answered. A later reply can",
+  "answer one even with other messages in between: \"no eggs\" or \"we're out of eggs\" answers \"do we have eggs?\".",
+  "answered: the ids of unanswered_questions the NEW message answers (yes or no). If that answer means an item is needed,",
+  "also put it in add.",
+  "track_question: true only when the NEW message is itself a question about having, needing or buying something",
+  "(\"do we have eggs?\", \"any milk left?\") that it does not answer itself; false for everything else.",
+  "Holding replies are not answers and not actions: \"I need to check\", \"let me look\", \"will check\", \"not sure\",",
+  "\"one sec\" -> nothing (no add, no answered).",
+  "\"no eggs\" on its own means the family has no eggs (they are needed), not that eggs should not be bought, unless",
+  "someone was asking what to buy.",
   "Use short, plain item names as a shopper would write them. Never invent items.",
 ].join(" ");
 
@@ -463,8 +479,10 @@ export async function readWindow(input: WindowInput, llm: JsonLlm = ollamaJson):
         list_question: { type: ["string", "null"] },
         setup_answer: { type: "object", properties: { kind: { type: "string", enum: ["shops", "items", "skip", "none"] }, names }, required: ["kind", "names"] },
         reply: { type: "string" },
+        answered: names,
+        track_question: { type: "boolean" },
       },
-      required: ["add", "bought", "remove", "preferences", "list_question", "setup_answer", "reply"],
+      required: ["add", "bought", "remove", "preferences", "list_question", "setup_answer", "reply", "answered", "track_question"],
     },
     temperature: 0.1,
   })) as Partial<WindowReading>;
@@ -480,5 +498,7 @@ export async function readWindow(input: WindowInput, llm: JsonLlm = ollamaJson):
     list_question: out.list_question ? String(out.list_question).trim() || null : null,
     setup_answer: { kind: kind === "shops" || kind === "items" || kind === "skip" ? kind : "none", names: strs(out.setup_answer?.names) },
     reply: String(out.reply ?? "").trim().slice(0, 300),
+    answered: strs(out.answered),
+    track_question: out.track_question === true,
   };
 }

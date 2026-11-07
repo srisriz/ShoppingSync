@@ -11,7 +11,7 @@ import {
 } from "../matching";
 import { tidyShopName, type AiShop, type ExtractedActions, type WindowReading } from "../ai";
 import { formatListMessage, isListRequest } from "../format";
-import { addToWindow, closeWindow, currentWindow, looksLikeQuestion, noteBotLine } from "./window";
+import { addToWindow, closeWindow, currentWindow, looksLikeQuestion, noteBotLine, updateQuestions } from "./window";
 import { formatReview, formatSummary, HELP_TEXT, isHelpRequest, isReviewRequest, isSummaryRequest, startOfTodayUk } from "../info";
 import { matchShopName, parseAddShop, parseDone, parseReplace, parseSynonyms, parseTanglishMeans } from "../commands";
 import { planReplace, type ReplaceItem } from "../replace";
@@ -20,6 +20,9 @@ import { handleOnboarding, maybeStartOnboarding, setupQuestionText } from "./onb
 
 /** "no thanks", "ok cool", "yes please", "nope, all good": a reply, never an item. */
 const CHAT_REPLY = /^(?:no|nope|nah|yes|yeah|yep|yup|ok|okay|sure|cool|great|fine)[\s,!.]*(?:thanks|thank you|thx|cheers|please|pls|worries|problem|all good|it'?s fine|that'?s fine|we'?re (?:fine|good|ok)|mate|then|cool|great)?[\s!.👍🙏]*$/iu;
+
+/** "no eggs", "no more milk": the family is out of it, or doesn't want it. Never an item called "no eggs". */
+const NO_ITEM = /^(?:no|no more|nope,?\s+no|zero)\s+\p{L}/iu;
 
 const QUESTION_TTL_MS = 24 * 3600 * 1000;      // unanswered questions expire after a day
 const BARE_ANSWER_WINDOW_MS = 30 * 60 * 1000;  // a plain "yes" (not a reply) counts for 30 minutes
@@ -54,9 +57,12 @@ const addItemsWith = (bot: Bot) => async (actions: ParsedAction[], msg: Incoming
 };
 
 export async function handleMessage(bot: Bot, m: IncomingMessage): Promise<void> {
-  if (await handleOnboarding(bot, m, addItemsWith(bot))) return;
-  await handleText(bot, m);
-  await maybeStartOnboarding(bot);
+  if (!(await handleOnboarding(bot, m, addItemsWith(bot)))) {
+    await handleText(bot, m);
+    await maybeStartOnboarding(bot);
+  }
+  // Keeps the window tidy: e.g. unanswered questions go once this message cleared the list.
+  await currentWindow(bot);
 }
 
 async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
@@ -180,8 +186,8 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
     bot.log("(a reply, nothing to do)");
     return;
   }
-  // Not a clear action (a question, a sentence): it goes to the context window.
-  if (!listActions && !unsure && parseMessageDetailed(english).needsAi) {
+  // Not a clear action (a question, a sentence, "no eggs"): it goes to the context window.
+  if (!listActions && !unsure && (parseMessageDetailed(english).needsAi || NO_ITEM.test(english.trim()))) {
     bot.log("not a clear action: into the context window");
     return readContext(bot, m, english);
   }
@@ -346,6 +352,7 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
   const [members, shops, needed, setupQuestion] = await Promise.all([
     bot.store.members(), bot.store.shops(), bot.store.neededItems(), setupQuestionText(bot),
   ]);
+  const questions = (w.questions ?? []).filter((q) => q.id !== m.id);
   const shopName = new Map(shops.map((s) => [s.id, s.name]));
   let r: WindowReading;
   try {
@@ -357,6 +364,7 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
       members,
       setup_question: setupQuestion,
       list: needed.map((i) => ({ item: i.name, shop: (i.shop_id && shopName.get(i.shop_id)) || "Needs review" })),
+      unanswered_questions: questions.map((q) => ({ id: q.id, from: q.sender, text: q.text, asked: whenSaid(q.at, bot.now()) })),
     });
   } catch (err) {
     bot.state.aiReady = false;
@@ -369,8 +377,14 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
     ...(r.list_question ? [`asks about ${r.list_question}`] : []),
     ...(r.setup_answer.kind !== "none" ? [`setup answer: ${r.setup_answer.kind} ${r.setup_answer.names.join(", ")}`] : []),
     ...(r.reply ? ["a reply"] : []),
+    ...(r.answered.length ? [`answers ${r.answered.map((id) => `"${questions.find((q) => q.id === id)?.text ?? id}"`).join(", ")}`] : []),
+    ...(r.track_question ? ["an open question"] : []),
   ];
   bot.log(`AI read the window: ${said.length ? said.join("; ") : "nothing to do yet"}`);
+  // Questions: answered ones go; a new shopping question stays until it's answered or the list is cleared.
+  const track = r.track_question && !r.reply && looksLikeQuestion(english);
+  await updateQuestions(bot, r.answered.filter((id) => questions.some((q) => q.id === id)),
+    track ? { id: m.id, sender: m.sender, text: m.text, at: bot.now().toISOString(), sawItems: needed.length > 0 } : null);
 
   const setup = r.setup_answer;
   if (setupQuestion && (setup.kind === "skip" || ((setup.kind === "shops" || setup.kind === "items") && setup.names.length))) {

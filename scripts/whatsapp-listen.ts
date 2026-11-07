@@ -36,8 +36,7 @@ import { chatReply, checkOllama, extractActions, guessShopItems, proposeShop, re
 import { generateToken, looksLikeCode, normaliseCode, sha256Hex } from "../lib/codes";
 import { handleMessage, maybeStartOnboarding, processQueuedMessages, proposeForReviewItems } from "../lib/bot/core";
 import type { Bot, BotAi, BotChat, BotState, IncomingMessage } from "../lib/bot/ports";
-import { clearStaleWindows, supabaseStore } from "./bot-supabase";
-import { WINDOW_IDLE_MS } from "../lib/bot/window";
+import { supabaseStore, tidyAllWindows } from "./bot-supabase";
 
 // Optional: links an existing family (set up before multi-group) to its WhatsApp group by name.
 const LEGACY_GROUP_NAME = (process.env.WHATSAPP_GROUP_NAME ?? "").trim();
@@ -629,10 +628,10 @@ async function startAiWorker(): Promise<void> {
   setInterval(() => enqueue(leaveExpiredGroups), 10 * 60_000);
   // Invites created after the bot joined a group: switch those groups on.
   setInterval(() => enqueue(activateInvitedGroups), 2 * 60_000);
-  // Context windows left quiet for 5 minutes are deleted, so chat isn't kept.
+  // Context windows: chat quiet for 5 minutes is deleted; unanswered questions go when the list is cleared.
   setInterval(async () => {
-    const n = await clearStaleWindows(db, WINDOW_IDLE_MS);
-    if (n) console.log(`  · deleted ${n} quiet context window${n === 1 ? "" : "s"}`);
+    const n = await tidyAllWindows(db);
+    if (n) console.log(`  · tidied ${n} context window${n === 1 ? "" : "s"}`);
   }, 60_000);
 }
 

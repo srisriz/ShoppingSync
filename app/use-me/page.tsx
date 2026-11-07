@@ -168,7 +168,7 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
           <div className="um-privacy">
             <h2>Your privacy</h2>
             <ul className="um-list">
-              <li><strong>Your shopping list is kept, your chat isn&apos;t.</strong> Clear messages like <q>milk</q> are handled and not kept. When something needs the conversation around it (a question, a <q>No</q>), the last few messages are held for up to 5 minutes so the bot can follow along, then deleted. Shopping messages it needs to check with you, or park for later, are kept with your list so it can finish the job.</li>
+              <li><strong>Your shopping list is kept, your chat isn&apos;t.</strong> Clear messages like <q>milk</q> are handled and not kept. When something needs the conversation around it (a question, a <q>No</q>), the last few messages are held for up to 5 minutes so the bot can follow along, then deleted. An unanswered shopping question, like <q>do we have eggs?</q>, is kept until it&apos;s answered or the list is cleared. Shopping messages it needs to check with you, or park for later, are kept with your list so it can finish the job.</li>
               <li><strong>Your list is private.</strong> Only your group&apos;s login can see it.</li>
               <li><strong>The AI runs on a private computer,</strong> not a public AI service. If you see 😴 it&apos;s offline; your message waits and is handled when it&apos;s back.</li>
               <li><strong>You&apos;re in control.</strong> Remove the bot from the group and it stops reading straight away.</li>

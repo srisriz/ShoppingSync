@@ -6,6 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { BotItem, BotShop, BotStore, ChatWindow, Onboarding, ParkedInput, QuestionInput } from "../lib/bot/ports";
 import type { SummaryItem } from "../lib/info";
+import { tidyWindow } from "../lib/bot/window";
 
 const ITEM_COLUMNS = "id, name, item_key, quantity, shop_id, requested_by, status, created_at, bought_at";
 const SHOP_COLUMNS = "id, name, example_items, categories, priority, notes";
@@ -25,13 +26,24 @@ function warnNoWindow(message: string) {
   console.error(`! Context window not saved (${message}). Run supabase/migrations/0010_chat_window.sql.`);
 }
 
-/** Deletes context windows nobody has added to for a while, in every group. */
-export async function clearStaleWindows(db: SupabaseClient, idleMs: number): Promise<number> {
-  const before = new Date(Date.now() - idleMs).toISOString();
-  const { data, error } = await db.from("families").update({ chat_window: null })
-    .not("chat_window", "is", null).lt("chat_window->>lastAt", before).select("id");
-  if (error) return 0;
-  return data?.length ?? 0;
+/**
+ * Tidies every group's context window: chat left quiet for a while is deleted, and
+ * unanswered questions go once that group's shopping list has been cleared.
+ * Returns how many windows changed.
+ */
+export async function tidyAllWindows(db: SupabaseClient): Promise<number> {
+  const { data, error } = await db.from("families").select("id, chat_window").not("chat_window", "is", null);
+  if (error || !data) return 0;
+  let changed = 0;
+  for (const row of data) {
+    const w = row.chat_window as ChatWindow;
+    const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("family_id", row.id).eq("status", "needed");
+    const tidy = tidyWindow(w, Date.now(), count ?? 0);
+    if (JSON.stringify(tidy) === JSON.stringify(w)) continue;
+    await db.from("families").update({ chat_window: tidy }).eq("id", row.id);
+    changed++;
+  }
+  return changed;
 }
 
 export function supabaseStore(db: SupabaseClient, fid: string): BotStore {

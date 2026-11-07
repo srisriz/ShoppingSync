@@ -57,7 +57,9 @@ export type Onboarding = {
  * half a sentence), read together by the AI. Kept for minutes, then deleted.
  */
 export type WindowMessage = { id: string; sender: string; text: string; at: string; replyTo: "bot" | "other" | null; toBot: boolean };
-export type ChatWindow = { openedAt: string; lastAt: string; messages: WindowMessage[] };
+/** A question nobody has answered yet ("do we have eggs?"). Kept until the shopping list is cleared. */
+export type WindowQuestion = { id: string; sender: string; text: string; at: string; /** the list has had items since it was asked */ sawItems: boolean };
+export type ChatWindow = { openedAt: string; lastAt: string; messages: WindowMessage[]; questions?: WindowQuestion[] };
 
 /** A message saved while the AI was off. */
 export type ParkedInput = { text: string; sender: string; key: unknown };

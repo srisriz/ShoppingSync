@@ -149,8 +149,11 @@ them as one conversation each time one is added. So Bob's "do we have eggs?" fol
 "I'll add *eggs* to the list. Reply *yes* to confirm". Anything the AI finds is asked about first, never done directly.
 A question about the list ("do we have eggs?", "did anyone get bread?") is answered from the list itself.
 
-The window is kept in `families.chat_window` (migration 0010) and deleted as soon as the bot acts or asks, after
-10 messages (the oldest drop off), or after 5 quiet minutes (the listener sweeps every minute).
+The window is kept in `families.chat_window` (migration 0010). Ordinary messages drop out as soon as the bot acts
+or asks, after 10 messages (the oldest go first), or after 5 quiet minutes. An unanswered shopping question
+("do we have eggs?") stays until someone answers it, even much later ("no eggs" 40 minutes on), or until the shopping
+list is cleared: it has had items since the question, and now it's empty (Done, everything ticked off, or Clear on the
+web page). The listener tidies every group's window once a minute.
 
 ## Needs review and the local AI
 
