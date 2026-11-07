@@ -58,7 +58,11 @@ export type Onboarding = {
  */
 export type WindowMessage = { id: string; sender: string; text: string; at: string; replyTo: "bot" | "other" | null; toBot: boolean };
 /** A question nobody has answered yet ("do we have eggs?"). Kept until the shopping list is cleared. */
-export type WindowQuestion = { id: string; sender: string; text: string; at: string; /** the list has had items since it was asked */ sawItems: boolean };
+export type WindowQuestion = {
+  id: string; sender: string; text: string; at: string;
+  /** the list has had items since it was asked */ sawItems: boolean;
+  /** "do we have shampoo?": the item, which the bot promised to add once someone confirms they're out */ item?: string;
+};
 export type ChatWindow = { openedAt: string; lastAt: string; messages: WindowMessage[]; questions?: WindowQuestion[] };
 
 /** A message saved while the AI was off. */

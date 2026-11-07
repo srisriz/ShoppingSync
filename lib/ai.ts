@@ -418,8 +418,11 @@ export type WindowReading = {
   bought: string[];
   remove: string[];
   preferences: { item: string; shop: string }[];
-  /** An item someone asked about ("do we have eggs?"), for the bot to answer from the list. */
+  /** An item someone asked about ("do we have eggs?", "is milk on the list?"). */
   list_question: string | null;
+  /** "list": asks about the list itself ("is milk on the list?", "did anyone get bread?"), the bot answers.
+   *  "home": asks the family whether they have it ("do we have eggs?"), the bot only says what the list shows. */
+  question_about: "list" | "home" | null;
   /** An answer to the setup question. */
   setup_answer: { kind: "shops" | "items" | "skip" | "none"; names: string[] };
   /** A short reply to a general question meant for the bot or the group, else "". */
@@ -444,6 +447,9 @@ const WINDOW_PROMPT = [
   "preferences: only when someone says where an item is better or should always be bought.",
   "list_question: when the NEW message asks whether the family has, needs or has bought an item (\"do we have eggs?\",",
   "\"is milk on the list?\", \"did anyone get bread?\"), that item, so the bot can say what the list shows. Else null.",
+  "question_about: \"list\" when it asks about the shopping list itself or whether someone bought it (\"is milk on the",
+  "list?\", \"do we have shampoo on the list?\", \"did anyone get bread?\"); \"home\" when it asks the family whether they have",
+  "it or need it (\"do we have shampoo?\", \"any milk left?\"); null when there is no list_question.",
   "setup_answer: only when setup_question is given and the NEW message answers that question (said to the bot or the",
   "whole group, not answering a family member): kind \"shops\" or \"items\" with the names listed, or \"skip\" if they",
   "decline it. A \"No\" that answers a family member is NOT a setup answer. Otherwise kind \"none\" with no names.",
@@ -477,12 +483,13 @@ export async function readWindow(input: WindowInput, llm: JsonLlm = ollamaJson):
         remove: names,
         preferences: { type: "array", items: { type: "object", properties: { item: { type: "string" }, shop: { type: "string" } }, required: ["item", "shop"] } },
         list_question: { type: ["string", "null"] },
+        question_about: { type: ["string", "null"], enum: ["list", "home", null] },
         setup_answer: { type: "object", properties: { kind: { type: "string", enum: ["shops", "items", "skip", "none"] }, names }, required: ["kind", "names"] },
         reply: { type: "string" },
         answered: names,
         track_question: { type: "boolean" },
       },
-      required: ["add", "bought", "remove", "preferences", "list_question", "setup_answer", "reply", "answered", "track_question"],
+      required: ["add", "bought", "remove", "preferences", "list_question", "question_about", "setup_answer", "reply", "answered", "track_question"],
     },
     temperature: 0.1,
   })) as Partial<WindowReading>;
@@ -496,6 +503,7 @@ export async function readWindow(input: WindowInput, llm: JsonLlm = ollamaJson):
     preferences: (Array.isArray(out.preferences) ? out.preferences : []).filter((p) => p?.item && p?.shop)
       .map((p) => ({ item: String(p.item), shop: String(p.shop) })).slice(0, 10),
     list_question: out.list_question ? String(out.list_question).trim() || null : null,
+    question_about: out.list_question ? (out.question_about === "list" ? "list" : "home") : null,
     setup_answer: { kind: kind === "shops" || kind === "items" || kind === "skip" ? kind : "none", names: strs(out.setup_answer?.names) },
     reply: String(out.reply ?? "").trim().slice(0, 300),
     answered: strs(out.answered),

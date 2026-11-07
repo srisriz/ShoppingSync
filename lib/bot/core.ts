@@ -24,6 +24,9 @@ const CHAT_REPLY = /^(?:no|nope|nah|yes|yeah|yep|yup|ok|okay|sure|cool|great|fin
 /** "no eggs", "no more milk": the family is out of it, or doesn't want it. Never an item called "no eggs". */
 const NO_ITEM = /^(?:no|no more|nope,?\s+no|zero)\s+\p{L}/iu;
 
+/** Starts like an answer to someone: "yes, plenty", "no, we're out", "nope we have loads". */
+const REPLY_LIKE = /^(?:yes|yeah|yep|yup|no|nope|nah)\b[\s,!.]+\S/i;
+
 const QUESTION_TTL_MS = 24 * 3600 * 1000;      // unanswered questions expire after a day
 const BARE_ANSWER_WINDOW_MS = 30 * 60 * 1000;  // a plain "yes" (not a reply) counts for 30 minutes
 
@@ -91,6 +94,9 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
       bot.log(`split into known items: ${split.map((a) => a.name).join(", ")}`);
     }
   }
+  // "yes, plenty", "no, we're fine": a reply, not a list of items called "yes" and "plenty".
+  const replyLike = REPLY_LIKE.test(text.trim());
+  if (replyLike) listShape = null;
   let listActions: ParsedAction[] | null = null;
   if (plainChat) {
     bot.log("rules: ordinary chat, nothing to do");
@@ -187,7 +193,7 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
     return;
   }
   // Not a clear action (a question, a sentence, "no eggs"): it goes to the context window.
-  if (!listActions && !unsure && (parseMessageDetailed(english).needsAi || NO_ITEM.test(english.trim()))) {
+  if (!listActions && !unsure && (parseMessageDetailed(english).needsAi || NO_ITEM.test(english.trim()) || replyLike)) {
     bot.log("not a clear action: into the context window");
     return readContext(bot, m, english);
   }
@@ -381,10 +387,30 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
     ...(r.track_question ? ["an open question"] : []),
   ];
   bot.log(`AI read the window: ${said.length ? said.join("; ") : "nothing to do yet"}`);
-  // Questions: answered ones go; a new shopping question stays until it's answered or the list is cleared.
-  const track = r.track_question && !r.reply && looksLikeQuestion(english);
-  await updateQuestions(bot, r.answered.filter((id) => questions.some((q) => q.id === id)),
-    track ? { id: m.id, sender: m.sender, text: m.text, at: bot.now().toISOString(), sawItems: needed.length > 0 } : null);
+  // "do we have shampoo?" for the family: the bot says what the list shows and, if it isn't on
+  // the list, keeps the question and adds shampoo as soon as someone confirms they're out.
+  const groups = await loadSynonyms(bot);
+  const homeItem = r.list_question && r.question_about === "home" ? r.list_question : null;
+  const alreadyListed = !!homeItem && needed.some((i) => sameItem(i.item_key, normalise(homeItem), groups) || sameItem(normalise(i.name), normalise(homeItem), groups));
+  const track = !!homeItem && !alreadyListed && !r.reply;
+  const answeredQs = questions.filter((q) => r.answered.includes(q.id));
+  await updateQuestions(bot, answeredQs.map((q) => q.id),
+    track ? { id: m.id, sender: m.sender, text: m.text, at: bot.now().toISOString(), sawItems: needed.length > 0, item: homeItem! } : null);
+
+  // The family confirmed they're out of something the bot promised to add: add it now.
+  const promised = answeredQs.map((q) => q.item).filter((x): x is string => !!x);
+  const isPromised = (a: ParsedAction) => a.kind === "add" && promised.some((p) => sameItem(normalise(a.name), normalise(p), groups));
+  const confirmed = actions.filter(isPromised);
+  if (confirmed.length) {
+    const done = await applyActions(bot, confirmed, m.sender, m.id);
+    if (done.summary) {
+      await reply(bot);
+      await bot.chat.send(done.summary, m);
+    }
+    if (done.changes > 0) bot.afterChange();
+    bot.log(`added as promised: ${confirmed.map((a) => a.name).join(", ")}`);
+  }
+  const rest = actions.filter((a) => !isPromised(a));
 
   const setup = r.setup_answer;
   if (setupQuestion && (setup.kind === "skip" || ((setup.kind === "shops" || setup.kind === "items") && setup.names.length))) {
@@ -393,11 +419,15 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
     await handleOnboarding(bot, { ...m, text, quotedFrom: "bot", mentionsBot: true }, addItemsWith(bot));
     return;
   }
-  if (actions.length || r.preferences.length) {
-    await askToConfirm(bot, m, { actions, preferences: r.preferences }); // closes the window
+  if (rest.length || r.preferences.length) {
+    await askToConfirm(bot, m, { actions: rest, preferences: r.preferences }); // closes the window
     return;
   }
-  const text = r.list_question ? await answerFromList(bot, r.list_question) : r.reply;
+  if (confirmed.length) {
+    await closeWindow(bot, "added what was confirmed");
+    return;
+  }
+  const text = r.list_question ? await answerFromList(bot, r.list_question, r.question_about ?? "list") : r.reply;
   if (!text) {
     bot.log("(nothing to do yet; the window stays open)");
     return;
@@ -408,8 +438,11 @@ async function readContext(bot: Bot, m: IncomingMessage, english: string): Promi
   bot.log(r.list_question ? "💬 answered from the list" : "💬 replied");
 }
 
-/** "do we have eggs?": what the list knows about it. Never claims to know what's at home. */
-async function answerFromList(bot: Bot, item: string): Promise<string> {
+/**
+ * What the list knows about an item. Never claims to know what's at home: for "do we have
+ * shampoo?" (about: "home") it says what the list shows and that it'll add it once someone confirms.
+ */
+async function answerFromList(bot: Bot, item: string, about: "list" | "home"): Promise<string> {
   const groups = await loadSynonyms(bot);
   const key = normalise(item);
   const same = (name: string, k: string) => sameItem(k, key, groups) || sameItem(normalise(name), key, groups);
@@ -423,7 +456,9 @@ async function answerFromList(bot: Bot, item: string): Promise<string> {
   const since = new Date(bot.now().getTime() - 7 * 24 * 3600 * 1000).toISOString();
   const got = (await bot.store.recentlyBought(since)).find((i) => same(i.name, i.item_key));
   if (got) return `✅ *${got.name}* was ticked off${got.bought_by ? ` by ${got.bought_by}` : ""} ${whenSaid(got.bought_at, bot.now())}.`;
-  return `*${item}* isn't on the list. Send *${item}* to add it.`;
+  return about === "home"
+    ? `*${item}* isn't on the list. Once someone confirms you're out, I'll add it.`
+    : `*${item}* isn't on the list. Send *${item}* to add it.`;
 }
 
 /** Saves the message for later and lets the group know. Nothing is guessed while the AI is off. */

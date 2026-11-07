@@ -275,7 +275,7 @@ export function guessShopItems(shop: string): { examples: string[]; categories: 
 
 /** "do we have eggs?", "any milk left?", "is bread on the list?", "did anyone get rice?" -> the item. */
 function itemAsked(text: string): string | null {
-  const t = toEnglish(text).english.trim().replace(/^(?:hey|hi|ok|so|um+)[\s,!]+/i, "");
+  const t = toEnglish(text).english.trim().replace(/^(?:hey|hi|ok|so|um+)[\s,!]+/i, "").replace(/\s+on\s+the\s+list(?=[\s?!.]*$)/i, "");
   const m =
     t.match(/^(?:do|did|have)\s+(?:we|you|u)\s+(?:still\s+)?(?:have|got|need)\s+(?:any\s+|some\s+|enough\s+)?(.+?)[\s?!.]*$/i) ??
     t.match(/^(?:is|are)\s+there\s+(?:any\s+|some\s+)?(.+?)(?:\s+(?:left|at home|in the fridge))?[\s?!.]*$/i) ??
@@ -292,7 +292,7 @@ const HOLDING = /^(?:i\s+)?(?:need to|have to|will|'ll|gotta|let me|lemme)?\s*(?
 const NO_ITEM = /^(?:no|no more|zero)\s+(.+?)[\s.!]*$|^(?:we'?re\s+)?out of\s+(.+?)[\s.!]*$|^(.+?)\s+(?:is|are)\s+(?:finished|over|gone)[\s.!]*$/i;
 
 export function readWindow(input: WindowInput, known: string[] = []): WindowReading {
-  const r: WindowReading = { add: [], bought: [], remove: [], preferences: [], list_question: null, setup_answer: { kind: "none", names: [] }, reply: "", answered: [], track_question: false };
+  const r: WindowReading = { add: [], bought: [], remove: [], preferences: [], list_question: null, question_about: null, setup_answer: { kind: "none", names: [] }, reply: "", answered: [], track_question: false };
   const last = input.messages.at(-1);
   if (!last) return r;
   const text = last.text.replace(/\s*\(in English: .*\)$/, "");
@@ -301,7 +301,12 @@ export function readWindow(input: WindowInput, known: string[] = []): WindowRead
   const needIt = (item: string) => { if (!listed(item)) r.add.push({ name: item, quantity: null, shop: null }); };
 
   const asked = itemAsked(text);
-  if (asked) { r.list_question = asked; r.track_question = true; return r; }
+  if (asked) {
+    r.list_question = asked;
+    r.question_about = /\bon\s+the\s+list\b|\bdid\s+(?:anyone|anybody|someone|you)\b/i.test(text) ? "list" : "home";
+    r.track_question = r.question_about === "home";
+    return r;
+  }
   if (HOLDING.test(english)) return r;
 
   // The latest unanswered question about an item, asked by someone else.
