@@ -2,6 +2,7 @@
  * Fixed answers the app writes itself (no AI), so they are always accurate:
  *   "help" / "what are your features?"  -> what the bot can do
  *   "summary" / "what happened today?"  -> today's list activity (the chat itself is never kept)
+ *   "review" / "review link"            -> the link to the web page's Needs review section
  */
 
 const stripMentions = (text: string) => text.replace(/@\S+/g, " ").replace(/#\w+/g, " ").replace(/\s+/g, " ").trim();
@@ -21,6 +22,23 @@ export function isSummaryRequest(text: string): boolean {
   return t.split(/\s+/).length <= 12 && SUMMARY.test(t);
 }
 
+const REVIEW =
+  /^(?:(?:hey|hi|ok)\s+)?(?:(?:open|show(?:\s+me)?|send(?:\s+me)?|give\s+me|share|what(?:'s|\s+is))\s+)?(?:the\s+)?(?:needs\s+)?review(?:\s+(?:page|link|list|items))?(?:\s+please)?[\s?!.]*$/i;
+
+/** "review", "review link", "open the review page", "needs review". */
+export function isReviewRequest(text: string): boolean {
+  return REVIEW.test(stripMentions(text));
+}
+
+/** The reply to "review": what's waiting in Needs review, and the link to sort it. */
+export function formatReview(names: string[], url: string | null): string {
+  const cap = (xs: string[], n = 12) => (xs.length > n ? [...xs.slice(0, n), `+${xs.length - n} more`] : xs).join(", ");
+  const head = names.length
+    ? `📝 *Needs review* (${names.length}): ${cap(names)}\nPick a shop or confirm the AI's suggestions here:`
+    : "👍 Nothing needs review right now. The list is here:";
+  return url ? `${head}\n${url}` : `${head.replace(/ here:$|:$/, ".")}`;
+}
+
 export const HELP_TEXT = [
   "🛒 *ShoppingSync can:*",
   '• *Add*: "milk, eggs and bread", "paal venum", "we\'re out of rice"',
@@ -29,6 +47,7 @@ export const HELP_TEXT = [
   '• *Fix a name*: "replace Riz with Rice"',
   '• *Show the list*: send "list"',
   '• *Today\'s activity*: send "summary"',
+  '• *Sort unknown items*: send "review" for the link to the review page',
   '• *Add a shop*: "add shop Lidl"',
   '• *Same words*: "paal means milk"',
   '• *Preferences*: "eggs are better in Waitrose"',

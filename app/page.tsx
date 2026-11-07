@@ -77,6 +77,14 @@ export default function ListPage() {
     return () => { supabase.removeChannel(channel); };
   }, [family, load]);
 
+  // The "review" link from WhatsApp ends in #review: scroll there once the list has loaded.
+  const [scrolledToReview, setScrolledToReview] = useState(false);
+  useEffect(() => {
+    if (scrolledToReview || items.length === 0 || window.location.hash !== "#review") return;
+    document.getElementById("review")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setScrolledToReview(true);
+  }, [items, scrolledToReview]);
+
   const shopIds = useMemo(() => new Set(shops.map((s) => s.id)), [shops]);
   const groups = useMemo(() => {
     const byShop = new Map<string, Item[]>();
@@ -314,7 +322,7 @@ export default function ListPage() {
         const list = groups.get(sec.id) ?? [];
         const needed = list.filter((i) => i.status === "needed").length;
         return (
-          <section key={sec.id} className={`card${sec.id === UNASSIGNED ? " unassigned" : ""}`}>
+          <section key={sec.id} id={sec.id === UNASSIGNED ? "review" : undefined} className={`card${sec.id === UNASSIGNED ? " unassigned" : ""}`}>
             <h2>
               {sec.title}
               <span className="count">

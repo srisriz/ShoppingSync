@@ -6,6 +6,7 @@
  */
 import { tidyShopName, type ExtractedActions } from "../ai";
 import { normalise, itemVariants, spellingKey } from "../matching";
+import { splitByShop } from "../parse";
 
 // ---------------------------------------------------------------------------
 // Translation (stands in for toEnglish)
@@ -142,7 +143,7 @@ export function extractActions(message: string, known: string[] = []): Extracted
     }
     // Preferences: "eggs are better in Waitrose", "flowers are good at the florists", "get flowers from the florist"
     if ((m = c.match(/^(?:the\s+)?(.+?)\s+(?:is|are)\s+(?:much\s+|way\s+)?(?:better|cheaper|best|good|nicer|fresher|great)\s+(?:in|at|from)\s+(?:the\s+)?(.+)$/i))
-      || (m = c.match(/^(?:always\s+)?(?:get|buy)\s+(?:the\s+)?(.+?)\s+(?:from|at)\s+(?:the\s+)?(.+)$/i))) {
+      || (m = c.match(/^always\s+(?:get|buy)\s+(?:the\s+)?(.+?)\s+(?:from|at)\s+(?:the\s+)?(.+)$/i))) {
       out.preferences.push({ item: cleanItem(m[1]), shop: tidyShopName(cleanItem(m[2])) });
       continue;
     }
@@ -170,7 +171,10 @@ export function extractActions(message: string, known: string[] = []): Extracted
     }
     // Requests: "can you pick up milk on the way home", "we need bread", "grab some lemons"
     if ((m = c.match(/\b(?:pick\s+up|get|buy|grab|bring|need|needs|want|wants|add)\s+(?:us\s+|me\s+)?(.+)$/i))) {
-      out.add.push(...splitItems(m[1]));
+      // "milk from Waitrose and flour from Costco": each shop goes with its own items, for this trip.
+      const wanted = cleanItem(m[1]);   // drop "on the way home" etc. first, so "from Waitrose" ends the text
+      const parts = splitByShop(wanted) ?? [{ text: wanted, shop: null }];
+      for (const part of parts) out.add.push(...splitItems(part.text).map((i) => ({ ...i, shop: part.shop ? tidyShopName(part.shop) : null })));
       continue;
     }
   }

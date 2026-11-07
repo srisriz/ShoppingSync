@@ -110,7 +110,7 @@ with Needs review items last. Reply **Done** to that list message when the shopp
 every item on it is ticked off as bought (items added after the list was sent stay on).
 Send **done costco** (any shop name, or the start of one) to tick off just that shop's items.
 Send **add shop Lidl** to create a shop (or **add shop Lidl: fruit, veg** to give it example items too).
-Stop it with Ctrl+C; messages sent while it was off are picked up when it starts again.
+Stop it with Ctrl+C; messages sent while it was off are picked up when it starts again. **review** (or "review link", "open the review page") replies with what's waiting in Needs review and a link straight to that section of the web page.
 
 ## Many WhatsApp groups, a super user and group logins
 
@@ -124,22 +124,10 @@ and console login. Nothing is shared between groups.
   passwords and changes its own password. Only the super user sees these.
 - **Group login**: one per WhatsApp group; sees and manages that group only.
 
-**Inviting someone (easiest)**
-1. On **All groups → Invites**, enter their name and WhatsApp number and click **Create invite**.
-2. Click **Send to … on WhatsApp**: their personal link (`/use-me?invite=…`, 7 days, once) opens the
-   **Use me** page with their name, the bot's number and a *Save contact* button. Without an invite, the
-   page explains ShoppingSync but doesn't show the bot's number.
-3. When the invited number adds the bot to a group (or created the group), the bot switches the group on
-   straight away, with no magic word, and privately sends them the setup link.
-4. Each invite shows its progress: Sent → Opened → Group on → Login set up. Cancel any unused invite.
-   The bot shares its own number with the website (stored server-side only) each time it connects.
-
-**Adding a group with a magic word**
+**Adding a group**
 1. Add the bot (the bot phone's number) to the WhatsApp group. It posts:
    "👋 Hi, I'm ShoppingSync. Reply to this group with your magic word." Until then it ignores the group.
-2. The group appears in **All groups** as *Waiting for magic word*, with **Added by** (the WhatsApp name and
-   number of whoever added the bot) so you know who is asking. Click **Create magic word** on its row, then
-   **Send privately** to open a WhatsApp chat with that person with the word already typed in.
+2. The group appears in **All groups** as *Waiting for magic word*. Click **Create magic word** on its row.
    The word works only in that group, once, within the group's 24 hours. Only its hash is stored.
 3. Someone in the group replies with it. Correct: the group is switched on, and the bot privately messages
    that person a one-time link (48 hours) to create the group's console login. Wrong (including a word made
@@ -150,9 +138,7 @@ and console login. Nothing is shared between groups.
 **Setup, once**
 1. Run `supabase/migrations/0004_groups.sql`, then `supabase/migrations/0005_super_user.sql`, in the SQL Editor.
 2. `npm run superuser:create` and choose the super user's username (default `admin`) and password.
-3. Run `supabase/migrations/0006_added_by.sql` (who added the bot).
-4. Run `supabase/migrations/0007_invites.sql` (personal invites).
-5. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
+3. Set `PUBLIC_BASE_URL` in `.env.local` to an address family phones can open: your Mac's Wi-Fi address
    while testing (`http://192.168.x.x:3000`, shown as "Network" when `npm run dev` starts), or the Vercel URL.
 
 ## Needs review and the local AI
@@ -181,25 +167,3 @@ git push -u origin main
 
 - Store the WhatsApp session (encrypted) in Supabase and run the same test inside a Vercel function.
 - Phase 2: message pipeline (split, rules, local Qwen worker) and tests T1–T10.
-
-## Demo page and the shared bot core
-
-`/demo` is a pretend family WhatsApp group in the browser: type as anyone in the family and the bot replies,
-sorts the list and learns, with nothing saved. It runs the same message handling as the real bot:
-`lib/bot/core.ts` holds it, and both sides plug in their own data, chat and AI (`lib/bot/ports.ts`):
-
-| | WhatsApp listener | Demo page |
-|---|---|---|
-| Data | Supabase (`scripts/bot-supabase.ts`) | memory (`lib/bot/memory.ts`) |
-| Chat | Baileys | the on-screen phone |
-| AI | Qwen in Ollama | a small built-in stand-in (`lib/sim/brain.ts`) |
-
-**The demo's AI (Qwen on Groq).** `/api/demo-ai` runs the bot's own AI tasks (same prompts as `lib/ai.ts`)
-on Groq. Set `GROQ_API_KEY` (Secret) and optionally `GROQ_MODEL` in Vercel. Without a key, or when Groq is
-busy, the demo uses its built-in stand-in. The family bot itself keeps using Qwen on the Mac.
-
-## Setup chat for new groups
-
-A newly switched-on group with no shops is asked, in WhatsApp: which shops it uses, then for each shop what
-it usually buys (offering the AI's guess: "Reply yes to use that"), and ends with a tip about family words.
-"skip" skips a question, "stop setup" ends it. Run `supabase/migrations/0008_setup_chat.sql` once.

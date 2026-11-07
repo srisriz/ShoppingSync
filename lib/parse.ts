@@ -5,13 +5,16 @@
  *   "got the bread and milk"                 -> mark bread and milk as bought
  *   "cancel eggs"                            -> remove eggs
  *   "on my way" / "ok" / "are you home?"     -> nothing (chatter)
+ *   "milk and yoghurt from Waitrose and almond flour from Costco"
+ *                                            -> add milk + yoghurt (Waitrose), almond flour (Costco)
  *
  * Anything that looks like an item is added; if no shop matches it goes to
  * "Unassigned" on the web page, where it can be moved or removed.
  */
 
 export type ParsedAction =
-  | { kind: "add"; name: string; quantity: string | null }
+  /** shop: named in the message for this trip ("from Costco"); the bot decides if it's a real shop. */
+  | { kind: "add"; name: string; quantity: string | null; shop?: string }
   | { kind: "bought"; name: string }
   | { kind: "remove"; name: string };
 
@@ -75,6 +78,76 @@ const SENTENCE_WORDS = /\b(?:i|i'm|im|you|you're|we|we're|were|our|us|me|my|he|s
  * we're also out of eggs") is flagged for the local AI, which reads the whole message.
  */
 export function parseMessageDetailed(text: string): ParseResult {
+  // "eggs from Costco", "milk from Waitrose and flour from Costco", "Costco: eggs, ghee":
+  // read each shop's part on its own, then tag its items with the shop.
+  const byShop = splitByShop(text);
+  if (byShop) {
+    const actions: ParsedAction[] = [];
+    let kind: ParsedAction["kind"] = "add";
+    for (const [i, seg] of byShop.entries()) {
+      const r = readWithoutShops(seg.text);
+      if (r.needsAi) return { actions: [], needsAi: true };
+      // "got milk from Tesco and eggs from Lidl": later parts share the first part's verb.
+      if (i === 0 && r.actions[0]) kind = r.actions[0].kind;
+      const ownVerb = /^\s*(?:and\s+|also\s+|then\s+)?(?:(?:can|could)\s+\S+\s+)?(?:please\s+)?(?:we\s+)?(?:need|get|buy|pick\s+up|add|grab|bring|got|bought|cancel|remove)\b/i.test(seg.text);
+      for (const a of r.actions) {
+        const k = i > 0 && !ownVerb ? kind : a.kind;
+        if (k === "add") actions.push({ kind: "add", name: a.name, quantity: a.kind === "add" ? a.quantity : null, ...(seg.shop ? { shop: seg.shop } : {}) });
+        else actions.push({ kind: k, name: a.name });
+      }
+    }
+    return { actions, needsAi: actions.length === 0 };
+  }
+  return readWithoutShops(text);
+}
+
+/** Words that can follow "from"/"at" but are people, places or times, not shops. */
+const NOT_A_SHOP = /^(?:home|work|school|the\s+office|office|night|lunch|dinner|breakfast|the\s+weekend|weekend|once|least|most|all|last|first|now|later|today|tonight|tomorrow|the\s+moment|you|me|us|them|him|her|mom|mum|mummy|dad|daddy|amma|appa|paati|thatha|nani|dadi|nana|anna|akka|thambi|bhaiya|didi|aunty|uncle|grandma|grandad|granny|the\s+kids|kids|\d.*)$/i;
+const SHOP_HEADING_NOT = /^(?:we\s+)?(?:need|needs|to\s+buy|to\s+get|shopping(?:\s+list)?|list|buy|get|items?|todo|to\s*do|reminder|note|pls|please)$/i;
+
+/**
+ * Splits a message into parts by the shop each is for, or null if it names no shop that way.
+ *   "milk and yoghurt from Waitrose and almond flour from Costco"
+ *       -> [{ "milk and yoghurt", Waitrose }, { "and almond flour", Costco }]
+ *   "Costco: eggs, ghee; Tesco: milk"  -> [{ "eggs, ghee", Costco }, { "milk", Tesco }]
+ * Whether a name is really one of the family's shops is decided later, by the bot.
+ */
+export function splitByShop(text: string): { text: string; shop: string | null }[] | null {
+  const body = text.replace(/#\w+/g, " ").replace(/[ \t]+/g, " ").trim();
+  if (!body) return null;
+
+  // Leading form, one shop per line or per ";" part: "Costco: eggs, ghee", "at Tesco: milk".
+  const chunks = body.split(/\n|;/).map((c) => c.trim()).filter(Boolean);
+  const headed = chunks.map((c) => {
+    const m = c.match(/^(?:(?:from|at)\s+)?([^:,]{2,30}):\s*(.+)$/i);
+    if (!m) return null;
+    const name = m[1].trim();
+    if (SHOP_HEADING_NOT.test(name) || NOT_A_SHOP.test(name) || name.split(/\s+/).length > 3) return null;
+    return { text: m[2], shop: name };
+  });
+  if (headed.some(Boolean)) return chunks.map((c, i) => headed[i] ?? { text: c, shop: null });
+
+  // Trailing form: "... from Waitrose", "... at Costco", one or more times.
+  const tag = /\s+(?:from|at)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}'&.\-]*(?:\s+[\p{L}\p{N}'&.\-]+){0,2}?)(?=\s*(?:$|[,;.!?\n]|\s+(?:and|then|also|plus)\b))/giu;
+  // "and almond flour from Costco": the joining word belongs to neither part.
+  const trimJoin = (t: string) => t.trim().replace(/^(?:and|also|then|plus|&)\s+/i, "").trim();
+  const parts: { text: string; shop: string | null }[] = [];
+  let cursor = 0;
+  for (const m of body.matchAll(tag)) {
+    const name = m[1].replace(/[.!?]+$/, "").trim();
+    if (NOT_A_SHOP.test(name)) continue;
+    const before = body.slice(cursor, m.index);
+    if (/\p{L}/u.test(before)) parts.push({ text: trimJoin(before), shop: name });
+    cursor = m.index! + m[0].length;
+  }
+  if (parts.length === 0) return null;
+  const rest = body.slice(cursor).replace(/^[\s,;.!?]+/, "");
+  if (/\p{L}/u.test(rest)) parts.push({ text: trimJoin(rest), shop: null });
+  return parts;
+}
+
+/** The rules without shop tags (see parseMessageDetailed). */
+function readWithoutShops(text: string): ParseResult {
   const cleaned = text.replace(/#\w+/g, " ").replace(/[ \t]+/g, " ").trim();
   // "rice is over" vs "the party is over": these words are ambiguous, so let the AI decide (and confirm).
   if (/\b(?:over|gone|empty)[\s!.]*$/i.test(cleaned)) return { actions: [], needsAi: true };

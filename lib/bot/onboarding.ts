@@ -7,7 +7,7 @@
  *      with the AI's guess offered as a starting point ("Reply yes to use that")
  *   Then a tip, not a question: family words ("pal means milk") can be taught any time.
  *
- * "skip" skips a question, "stop setup" ends it; "list", "help" and "summary" still
+ * "skip" skips a question, "stop setup" ends it; "list", "help", "summary" and "review" still
  * work meanwhile. If nobody answers for a day, the setup quietly ends.
  *
  * Families often ignore the question and just post shopping ("milk"). Items in an answer
@@ -20,7 +20,7 @@ import { buildSynonymGroups, normalise, suggestShop } from "../matching";
 import { isShopName, looksLikeItem, splitShopsAndItems } from "../lexicon";
 import { tidyShopName } from "../ai";
 import { isListRequest } from "../format";
-import { isHelpRequest, isSummaryRequest } from "../info";
+import { isHelpRequest, isReviewRequest, isSummaryRequest } from "../info";
 import { matchShopName, parseSynonyms, parseTanglishMeans } from "../commands";
 import type { Bot, BotShop, IncomingMessage, Onboarding, SynonymPairInput } from "./ports";
 
@@ -61,7 +61,7 @@ export async function handleOnboarding(bot: Bot, m: IncomingMessage, addItems: A
     bot.log("setup chat: no answer for a day, so it ended quietly");
     return false;
   }
-  if (isListRequest(m.text) || isHelpRequest(m.text) || isSummaryRequest(m.text)) return false;
+  if (isListRequest(m.text) || isHelpRequest(m.text) || isSummaryRequest(m.text) || isReviewRequest(m.text)) return false;
 
   const text = m.text.trim();
   if (STOP.test(text)) {

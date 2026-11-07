@@ -132,4 +132,6 @@ export type Bot = {
   /** Runs AI shop suggestions after this message (queued in the listener, straight after in the demo). */
   afterChange: () => void;
   now: () => Date;
+  /** Link to this group's Needs review section on the web page (null if there's no page to link to). */
+  reviewUrl: string | null;
 };

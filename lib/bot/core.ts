@@ -9,9 +9,9 @@ import {
   buildSynonymGroups, findFamilyWord, groupList, isKnownItem, normalise, onlyKnownWords, sameItem, splitKnownWords,
   suggestShop, type KnownItems, type SynonymGroups,
 } from "../matching";
-import type { AiShop, ExtractedActions } from "../ai";
+import { tidyShopName, type AiShop, type ExtractedActions } from "../ai";
 import { formatListMessage, isListRequest } from "../format";
-import { formatSummary, HELP_TEXT, isHelpRequest, isSummaryRequest, startOfTodayUk } from "../info";
+import { formatReview, formatSummary, HELP_TEXT, isHelpRequest, isReviewRequest, isSummaryRequest, startOfTodayUk } from "../info";
 import { matchShopName, parseAddShop, parseDone, parseReplace, parseSynonyms, parseTanglishMeans } from "../commands";
 import { planReplace, type ReplaceItem } from "../replace";
 import type { Bot, BotItem, IncomingMessage, Preference, QuestionInput, SynonymPairInput } from "./ports";
@@ -32,7 +32,7 @@ type Reading = { actions: ParsedAction[]; preferences: Preference[]; fromAi: boo
 
 /** Every command the bot recognises as written, without the AI. */
 export function isCommand(text: string): boolean {
-  return isListRequest(text) || isHelpRequest(text) || isSummaryRequest(text) || !!parseAddShop(text) || !!parseDone(text) ||
+  return isListRequest(text) || isHelpRequest(text) || isSummaryRequest(text) || isReviewRequest(text) || !!parseAddShop(text) || !!parseDone(text) ||
     !!parseAnswer(text) || !!parseSynonyms(text) || !!parseReplace(text) || !!parseTanglishMeans(text);
 }
 
@@ -132,6 +132,13 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
     bot.log("→ sent today's summary");
     return;
   }
+  if (isReviewRequest(english)) {
+    const review = (await bot.store.neededItems()).filter((i) => !i.shop_id).map((i) => i.name);
+    await reply(bot);
+    await bot.chat.send(formatReview(review, bot.reviewUrl), m);
+    bot.log(`→ sent the review link (${review.length} waiting)`);
+    return;
+  }
   const replace = parseReplace(english);
   if (replace) return handleReplace(bot, m, replace.from, replace.to);
   const synonymPairs = parseSynonyms(english);
@@ -169,14 +176,57 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
     if (!asked) await maybeChatReply(bot, m);
     return;
   }
-  const result = await applyActions(bot, reading.actions, sender, m.id);
+  // "almond flour from Costco": a shop the family already has is used straight away;
+  // one they don't have yet is asked about first ("Costco isn't one of your shops yet").
+  const { ready, unknownShop } = await sortByShop(bot, reading.actions);
+  const result = await applyActions(bot, ready, sender, m.id);
   if (result.summary) {
     await reply(bot); // a human-like pause before replying
     await bot.chat.send(result.summary, m);
-  } else {
-    await maybeChatReply(bot, m);
   }
+  if (unknownShop.length) await askToConfirm(bot, m, { actions: unknownShop, preferences: [] });
+  else if (!result.summary) await maybeChatReply(bot, m);
   if (result.changes > 0) bot.afterChange();
+}
+
+/**
+ * Splits actions by whether the shop they name ("from Costco") is one of the family's shops.
+ * A name that is a family member ("flowers from Bob") isn't a shop: the shop is dropped.
+ */
+async function sortByShop(bot: Bot, actions: ParsedAction[]): Promise<{ ready: ParsedAction[]; unknownShop: ParsedAction[] }> {
+  if (!actions.some((a) => a.kind === "add" && a.shop)) return { ready: actions, unknownShop: [] };
+  const [shops, members] = await Promise.all([bot.store.shops(), bot.store.members()]);
+  const ready: ParsedAction[] = [], unknownShop: ParsedAction[] = [];
+  for (const a of actions) {
+    if (a.kind !== "add" || !a.shop) { ready.push(a); continue; }
+    if (members.some((n) => normalise(n) === normalise(a.shop!))) { ready.push({ kind: "add", name: a.name, quantity: a.quantity }); continue; }
+    (matchShopName(a.shop, shops).kind === "none" ? unknownShop : ready).push(a);
+  }
+  if (unknownShop.length) bot.log(`not one of the shops yet: ${[...new Set(unknownShop.map((a) => (a as { shop: string }).shop))].join(", ")}`);
+  return { ready, unknownShop };
+}
+
+/** Creates the shops that confirmed actions name but the family doesn't have yet ("Costco"). Returns their names. */
+async function createNamedShops(bot: Bot, actions: ParsedAction[]): Promise<string[]> {
+  const created: string[] = [];
+  for (const a of actions) {
+    if (a.kind !== "add" || !a.shop) continue;
+    const shops = await bot.store.shops();
+    if (namedShop(a.shop, shops)) continue;
+    const priority = Math.max(100, ...shops.map((s) => s.priority)) + 10;
+    const shop = await bot.store.addShop({ name: tidyShopName(a.shop), example_items: [], priority });
+    if (shop) { created.push(shop.name); bot.log(`+ shop ${shop.name}`); }
+  }
+  return created;
+}
+
+/** The shop an action names, if it's one of the family's shops. */
+function namedShop<S extends { id: string; name: string }>(said: string | undefined, shops: S[]): S | null {
+  if (!said) return null;
+  const match = matchShopName(said, shops);
+  if (match.kind === "one") return match.shop;
+  if (match.kind === "several") return match.shops.find((s) => normalise(s.name) === normalise(said)) ?? match.shops[0];
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +273,7 @@ async function translateListItems(bot: Bot, actions: ParsedAction[], groups: Syn
 /** The AI's reading of a message, in the same shape the rules produce. */
 function toActions(ex: ExtractedActions): ParsedAction[] {
   return [
-    ...ex.add.map((a) => ({ kind: "add" as const, name: a.name, quantity: a.quantity })),
+    ...ex.add.map((a) => ({ kind: "add" as const, name: a.name, quantity: a.quantity, ...(a.shop ? { shop: a.shop } : {}) })),
     ...ex.bought.map((name) => ({ kind: "bought" as const, name })),
     ...ex.remove.map((name) => ({ kind: "remove" as const, name })),
   ];
@@ -350,7 +400,24 @@ async function askToConfirm(
     pairedAdds.add(add);
     pairedPrefs.add(p);
   }
-  const adds = actions.filter((a) => a.kind === "add" && !pairedAdds.has(a)).map(label);
+  const adds = actions.filter((a) => a.kind === "add" && !pairedAdds.has(a) && !(a.kind === "add" && a.shop)).map(label);
+  // Items named with a shop: "add milk under Waitrose", "add Costco as a place and put almond flour there"
+  const byShop = new Map<string, ParsedAction[]>();
+  for (const a of actions) {
+    if (a.kind !== "add" || !a.shop || pairedAdds.has(a)) continue;
+    const shop = namedShop(a.shop, shops);
+    const key = shop ? shop.name : a.shop;
+    byShop.set(key, [...(byShop.get(key) ?? []), a]);
+  }
+  const shopLines = [...byShop].map(([shopName, items]) => {
+    const known = !!namedShop(shopName, shops);
+    return known
+      ? { text: `add ${andList(items.map(label))} under ${bold(shopName)}`, single: "" }
+      : {
+        text: `add ${bold(shopName)} as a place and put ${andList(items.map(label))} there`,
+        single: `${shopName} isn't one of your shops yet. Reply *yes* to add ${bold(shopName)} and put ${andList(items.map(label))} there.`,
+      };
+  });
   const bought = actions.filter((a) => a.kind === "bought").map(label);
   const removed = actions.filter((a) => a.kind === "remove").map(label);
   const prefLines = preferences.filter((p) => !pairedPrefs.has(p)).map((p) => {
@@ -363,6 +430,7 @@ async function askToConfirm(
   const lines = [
     ...combined,
     ...(adds.length ? [`add ${andList(adds)}`] : []),
+    ...shopLines.map((l) => l.text),
     ...(bought.length ? [`tick off ${andList(bought)}`] : []),
     ...(removed.length ? [`remove ${andList(removed)}`] : []),
     ...prefLines.map((p) => p.text),
@@ -370,6 +438,7 @@ async function askToConfirm(
   ];
   let text: string;
   if (prefLines.length === 1 && lines.length === 1) text = prefLines[0].single;
+  else if (shopLines.length === 1 && lines.length === 1 && shopLines[0].single) text = shopLines[0].single;
   else if (adds.length && lines.length === 1) text = `I'll add ${andList(adds)} to the list. Reply *yes* to confirm, or *no* to skip.`;
   else if (lines.length === 1) text = `Shall I ${lines[0]}? Reply *yes* to confirm, or *no* to skip.`;
   else text = `From that message, shall I:\n${lines.map((l) => `• ${l}`).join("\n")}\n\nReply *yes* to confirm, or *no* to skip.`;
@@ -438,6 +507,7 @@ async function handleAnswer(bot: Bot, answer: "yes" | "no", answeredBy: string, 
   }
   const syn = input.synonyms?.length ? await saveSynonymPairs(bot, input.synonyms) : null; // first, so matching uses them
   const prefs = await applyPreferences(bot, input.preferences);          // first, so added items land in the new place
+  prefs.newPlaces.push(...(await createNamedShops(bot, input.actions)));  // "add Costco as a place and put … there"
   const result = await applyActions(bot, input.actions, input.sender, task.id);
   await bot.store.closeTask(task.id, { answer: "yes", by: answeredBy, changes: result.changes, rules: prefs.count });
   const addedItems = new Set(input.actions.filter((a) => a.kind === "add").map((a) => normalise(a.name)));
@@ -511,6 +581,16 @@ export async function applyActions(bot: Bot, actions: ParsedAction[], sender: st
     const existing = needed.find((it) => sameItem(it.item_key, key, synonyms)); // "paal" merges into "milk"
 
     if (action.kind === "add") {
+      const named = namedShop(action.shop, shops);   // "from Costco": this trip's shop
+      if (existing && named && existing.shop_id !== named.id) {
+        // Already on the list under another shop: move it there for this trip.
+        await bot.store.updateItem(existing.id, { shop_id: named.id });
+        bot.log(`→ ${action.name} moved to ${named.name} (named in the message)`);
+        existing.shop_id = named.id;
+        updated.push(`${action.name} (moved to ${named.name})`);
+        changes++;
+        continue;
+      }
       if (existing) {
         const requested_by = existing.requested_by.includes(requester) ? existing.requested_by : [...existing.requested_by, requester];
         const isExtra = !!action.quantity && (action.quantity === "extra" || action.quantity.startsWith("+"));
@@ -523,11 +603,11 @@ export async function applyActions(bot: Bot, actions: ParsedAction[], sender: st
         bot.log(`= ${action.name} (already on the list; added ${requester})`);
         updated.push(quantity ? `${action.name} (${quantity})` : action.name);
       } else {
-        const shop_id = suggestShop(key, rules, shops, synonyms);
+        const shop_id = named?.id ?? suggestShop(key, rules, shops, synonyms);
         const item = await bot.store.addItem({ name: action.name, quantity: action.quantity, shop_id, requested_by: [requester], source_message_id: messageId });
         if (!item) { bot.log(`✗ ${action.name}`); continue; }
         needed.push(item);
-        bot.log(`+ ${action.name}${action.quantity ? ` (${action.quantity})` : ""} → ${shop_id ? `${shopName.get(shop_id)} (matched by a rule)` : "Needs review"}`);
+        bot.log(`+ ${action.name}${action.quantity ? ` (${action.quantity})` : ""} → ${named ? `${named.name} (named in the message)` : shop_id ? `${shopName.get(shop_id)} (matched by a rule)` : "Needs review"}`);
         added.push(`${action.name} (${shop_id ? shopName.get(shop_id) : "needs review"})`);
       }
       changes++;

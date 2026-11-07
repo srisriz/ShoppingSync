@@ -113,7 +113,8 @@ export async function proposeShop(item: string, shops: AiShop[], past: PastChoic
 // Reading free-text messages
 
 export type ExtractedActions = {
-  add: { name: string; quantity: string | null }[];
+  /** shop: a shop named for this trip ("eggs from Costco"), else null. */
+  add: { name: string; quantity: string | null; shop?: string | null }[];
   bought: string[];
   remove: string[];
   /** "eggs are better in Waitrose": where an item should be bought. Not a request to buy it. */
@@ -131,8 +132,12 @@ const EXTRACT_PROMPT = [
   "(\"rice is over\", \"out of milk\", \"tomatoes are finished\" -> add rice / milk / tomatoes).",
   "bought: things someone says they have bought or picked up.",
   "remove: things someone says are no longer needed.",
-  "preferences: when someone says where an item is better, cheaper or should be bought",
-  "(\"eggs are better in Waitrose\", \"get flowers from the florist\"), record the item and the shop as written.",
+  "shop (on each add): when the message says where to buy it this time (\"buy eggs from Costco\",",
+  "\"milk and yoghurt from Waitrose and almond flour from Costco\", \"pick up bread at Lidl\"), the shop as written; else null.",
+  "Each shop applies to the items named with it, not to the whole message.",
+  "preferences: only when someone says where an item is better, cheaper, or should always or usually be bought",
+  "(\"eggs are better in Waitrose\", \"always get flowers from the florist\"), record the item and the shop as written.",
+  "A shop named for one trip (\"buy eggs from Costco\") is a shop on the add, not a preference.",
   "A preference on its own is NOT a request to buy: do not also put that item in add unless they ask for it.",
   "Only record a preference when the place sells or hosts that item.",
   "Example: \"The new Ramayana movie should be seen at iMax\" -> add \"Ramayana movie\", preference {item: \"Ramayana movie\", shop: \"iMax\"}.",
@@ -151,8 +156,8 @@ export async function extractActions(message: string, llm: JsonLlm = ollamaJson)
         type: "array",
         items: {
           type: "object",
-          properties: { name: { type: "string" }, quantity: { type: ["string", "null"] } },
-          required: ["name", "quantity"],
+          properties: { name: { type: "string" }, quantity: { type: ["string", "null"] }, shop: { type: ["string", "null"] } },
+          required: ["name", "quantity", "shop"],
         },
       },
       bought: { type: "array", items: { type: "string" } },
@@ -171,7 +176,7 @@ export async function extractActions(message: string, llm: JsonLlm = ollamaJson)
   const out = (await llm({ system: EXTRACT_PROMPT, user: message, schema, temperature: 0 })) as Partial<ExtractedActions>;
   const clean = (x: unknown) => String(x ?? "").trim().slice(0, 60);
   return {
-    add: (out.add ?? []).map((i) => ({ name: clean(i?.name), quantity: i?.quantity ? clean(i.quantity) : null })).filter((i) => i.name),
+    add: (out.add ?? []).map((i) => ({ name: clean(i?.name), quantity: i?.quantity ? clean(i.quantity) : null, shop: i?.shop ? clean(i.shop) : null })).filter((i) => i.name),
     bought: (out.bought ?? []).map(clean).filter(Boolean),
     remove: (out.remove ?? []).map(clean).filter(Boolean),
     preferences: (out.preferences ?? [])

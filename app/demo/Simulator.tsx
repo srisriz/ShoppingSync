@@ -55,6 +55,7 @@ const TRY: { label: string; items: [string, string][] }[] = [
   ] },
   { label: "Everything else", items: [
     ["help", "What the bot can do."],
+    ["review", "The link to the review page, with what's waiting there."],
     ["summary", "What happened on the list today."],
     ["what time is it in Chennai?", "Answers questions meant for it."],
     ["Mom, what time are you home?", "Stays out of family conversations."],
@@ -157,6 +158,8 @@ export default function Simulator({ intro }: { intro?: ReactNode }) {
       });
     },
     now: () => new Date(),
+    // The real link needs a family login, so the demo points at its own list panel.
+    reviewUrl: typeof window === "undefined" ? null : `${window.location.origin}${window.location.pathname}#sim-list`,
   }), [push, refresh]);
 
   /** One message at a time, like the real bot's single queue. */
@@ -395,7 +398,7 @@ export default function Simulator({ intro }: { intro?: ReactNode }) {
           ) : <p className="sim-hint">Send a message to see each step the bot takes.</p>}
         </div>
 
-        <div className="sim-panel">
+        <div className="sim-panel" id="sim-list">
           <h2>The list <span className="sim-count">{needed.length}</span></h2>
           <p className="sim-hint">What the family sees on their web page.</p>
           {review.length > 0 && (

@@ -13,7 +13,8 @@
  * proposes a shop for each one; confirming it on the web page saves a rule.
  *
  * Send "list" in the group and the bot replies with the whole list, shop by shop.
- * "help" explains what the bot can do; "summary" gives today's list activity.
+ * "help" explains what the bot can do; "summary" gives today's list activity;
+ * "review" sends the link to the web page's Needs review section.
  * "Replace Riz with Rice" renames items and merges duplicates under the same shop.
  * Reply "Done" to that list message and every item on it is ticked off as bought;
  * "done costco" ticks off just the Costco items.
@@ -141,6 +142,8 @@ function botForCurrentGroup(): Bot {
     pause: async (min, max) => { await sleep(min + Math.random() * (max - min)); },
     afterChange: () => enqueueHere(() => proposeForReviewItems(botForCurrentGroup())),
     now: () => new Date(),
+    // ?g= picks the group for the super user; group logins only ever see their own group.
+    reviewUrl: `${BASE_URL}/?g=${fid}#review`,
   };
 }
 
