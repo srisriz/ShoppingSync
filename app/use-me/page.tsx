@@ -109,12 +109,38 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
                 </li>
                 <li>
                   <h3>Try it</h3>
-                  <p>Send <q>milk</q> in the group, then <q>list</q>. The bot replies, and milk appears on your web page.</p>
+                  <p>Send <q>milk</q> in the group, then <q>list</q>. The bot replies, and milk appears on your web page. Send <q>help</q> any time to see <a href="#commands">everything it can do</a>.</p>
                 </li>
               </ol>
             </div>
           </section>
         )}
+
+        <section className="um-section um-wrap" id="commands">
+          <h2>What you can say</h2>
+          <p className="um-sub">
+            Plain messages in the group, in English, Tanglish or Hinglish. No need to be exact: if the bot isn&apos;t sure, it asks.{" "}
+            <a className="um-inline-link" href="#try">Try any of these below ↓</a>
+          </p>
+          <div className="um-cmds">
+            {COMMANDS.map((g) => (
+              <div className="um-cmd-group" key={g.title}>
+                <h3>{g.title}</h3>
+                <ul>
+                  {g.items.map(([say, does]) => (
+                    <li key={say}>
+                      <span className="um-say">{say}</span>
+                      <span className="um-does">{does}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+          <p className="um-cmd-note">
+            💡 Every list the bot sends ends with a <em>Did you know…</em>: a tip you might have missed, or a fun food fact.
+          </p>
+        </section>
 
         <section className="um-section um-try" id="try-it">
           <div className="um-wrap">
@@ -172,7 +198,7 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
               </details>
               <details>
                 <summary>Something went to the wrong shop</summary>
-                <p>Change the shop on the web page. The bot remembers, and gets it right next time.</p>
+                <p>Change the shop on the web page, or say <q>eggs are better at Waitrose</q> in the group. The bot remembers, and gets it right next time.</p>
               </details>
             </div>
           </section>
@@ -188,6 +214,35 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
     </div>
   );
 }
+
+/** The "What you can say" section. Keep in step with HELP_TEXT in lib/info.ts. */
+const COMMANDS: { title: string; items: [string, string][] }[] = [
+  { title: "Add things", items: [
+    ["milk, eggs and bread", "Each item goes under the shop you buy it from."],
+    ["paal venum · doodh chahiye", "Tanglish and Hinglish work too."],
+    ["eggs from Costco", "Puts them under Costco for this trip only. If Costco is new, it asks first."],
+  ] },
+  { title: "Tick off", items: [
+    ["got milk", "Ticks off one item. If someone already did, it says who and when."],
+    ["done Tesco", "Ticks off everything from that shop."],
+    ["Done", "Sent as a reply to a list, ticks off everything on it."],
+  ] },
+  { title: "Fix mistakes", items: [
+    ["cancel eggs", "Takes it off the list without ticking it."],
+    ["replace Riz with Rice", "Fixes a name, and merges it with anything already called Rice."],
+  ] },
+  { title: "Teach it", items: [
+    ["paal means milk", "Remembers your family's words."],
+    ["eggs are better at Waitrose", "Always puts eggs under Waitrose from now on."],
+    ["add shop Lidl", "Adds a new shop."],
+  ] },
+  { title: "Ask it", items: [
+    ["list", "Sends the list, sorted by shop."],
+    ["review", "A link to the web page's Needs review section, to place anything it wasn't sure about."],
+    ["summary", "What was added and ticked off today."],
+    ["help", "Everything it can do, in the chat."],
+  ] },
+];
 
 /** The hero's one moment: messages arrive in the chat and get written onto the fridge list. */
 function Demo() {

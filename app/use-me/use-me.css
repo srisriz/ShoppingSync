@@ -232,3 +232,18 @@
 .um .sim-intro h2 { font-size: clamp(28px, 3.4vw, 40px); line-height: 1.08; margin: 4px 0 10px; }
 .um .sim-intro .um-sub { margin: 0; }
 @media (max-width: 600px) { .um-try { padding-top: 40px; } }
+
+/* What you can say: grouped commands, each example drawn as a sent WhatsApp bubble. */
+.um-cmds { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px 32px; }
+.um-cmd-group h3 { border-top: 3px solid var(--leaf); padding-top: 14px; margin: 0 0 12px; }
+.um-cmd-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.um-cmd-group li { display: grid; gap: 4px; justify-items: start; }
+.um-say { background: var(--bubble); color: var(--bubble-ink); border-radius: 14px 14px 4px 14px; padding: 6px 12px;
+  font-size: 15px; font-weight: 600; box-shadow: 0 1px 0 rgba(18, 41, 31, 0.12); overflow-wrap: anywhere; }
+.um-does { color: var(--muted); font-size: 15px; line-height: 1.5; }
+.um-cmd-note { margin: 32px 0 0; padding: 14px 18px; border-radius: 12px; background: var(--surface); border: 1px solid var(--rule);
+  color: var(--muted); font-size: 16px; }
+@media (prefers-color-scheme: dark) {
+  .um-cmd-group h3 { border-top-color: var(--turmeric); }
+  .um-say { background: #24453a; color: #e6efe8; }
+}
