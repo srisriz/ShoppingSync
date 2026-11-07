@@ -110,7 +110,30 @@ async function knownItems(bot: Bot) {
 }
 
 /** A reply to "Which shops do you usually buy from?": shops, plus any items posted instead. */
+/**
+ * A question ("hey, do we have eggs?", "what's this?") is someone talking, not an
+ * answer to "which shops?": it's handled as usual and the setup question stays open.
+ */
+const QUESTION_START = /^(?:(?:hey|hi|hello|ok|oh|so|um+)[\s,!]+)*(?:do|does|did|is|are|was|were|have|has|can|could|should|shall|will|would|what|what's|whats|where|when|who|why|how|which|any(?:one|body)?)\b/i;
+
+/** Words that never appear in a shop's name, so "Hey Do" or "Have Eggs" isn't taken as one. */
+const NOT_SHOP_WORDS = new Set(["hey", "hi", "hello", "do", "does", "did", "we", "you", "i", "me", "us", "have", "has", "had",
+  "is", "are", "was", "were", "can", "could", "should", "will", "would", "need", "needs", "got", "get", "buy", "any", "anyone",
+  "what", "where", "when", "who", "why", "how", "please", "pls", "thanks", "ok", "okay", "yes", "no"]);
+export function plausibleShopName(name: string): boolean {
+  if (isShopName(name)) return true;
+  const words = name.toLowerCase().replace(/[^\p{L}\p{N}'&\s-]/gu, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 4 && !words.some((w) => NOT_SHOP_WORDS.has(w));
+}
+
 async function readShopsReply(bot: Bot, text: string): Promise<{ shops: string[]; items: ParsedAction[] } | null> {
+  const t = text.trim();
+  // "Tesco?" is still an answer; "we have eggs?" isn't.
+  const asks = QUESTION_START.test(t) || (/\?\s*$/.test(t) && t.toLowerCase().split(/[^\p{L}']+/u).some((w) => NOT_SHOP_WORDS.has(w)));
+  if (asks) {
+    bot.log("setup chat: a question, not an answer to which shops");
+    return null;
+  }
   const known = await knownItems(bot);
   const reading = parseMessageDetailed(text);
   if (!reading.needsAi) {
@@ -153,7 +176,9 @@ async function answerShops(bot: Bot, ob: Onboarding, m: IncomingMessage, addItem
     bot.log("setup chat: not an answer to the shops question; handled as usual");
     return false;
   }
-  const said = [...new Set(reply.shops.map(tidyShopName).filter(Boolean))];
+  const odd = reply.shops.filter((n) => !plausibleShopName(n));
+  if (odd.length) bot.log(`setup chat: not shop names: ${odd.join(", ")}`);
+  const said = [...new Set(reply.shops.filter(plausibleShopName).map(tidyShopName).filter(Boolean))];
 
   if (said.length === 0) {
     // No shops: most likely shopping posted instead ("milk"). Add it, and ask again, once.
