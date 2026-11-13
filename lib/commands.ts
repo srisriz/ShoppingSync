@@ -19,6 +19,18 @@ export function parseDone(text: string): DoneCommand | null {
   return { shop: shop || null };
 }
 
+const SHOP_DONE = /^(?:(?:at|with)\s+)?(?:the\s+)?(.+?)\s+(?:shop(?:ping)?\s+|list\s+|trip\s+)?(?:is\s+|all\s+)?(?:done|finished|complete|sorted)[\s!.✅👍]*$/i;
+
+/**
+ * "Waitrose done", "Tesco shopping done", "the Indian shop is finished": the shop first.
+ * Only a shop name counts (the caller checks), so "milk done" isn't taken for a shop.
+ */
+export function parseShopDone(text: string): string | null {
+  const m = text.replace(/#\w+/g, "").trim().match(SHOP_DONE);
+  const shop = m?.[1]?.replace(/\s+(?:shop|list|store)$/i, "").trim();
+  return shop && shop.split(/\s+/).length <= 4 ? shop : null;
+}
+
 export type ShopMatch<S> =
   | { kind: "one"; shop: S }
   | { kind: "several"; shops: S[] }

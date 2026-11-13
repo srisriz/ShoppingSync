@@ -13,7 +13,7 @@ import { tidyShopName, type AiShop, type ExtractedActions, type WindowReading } 
 import { formatListMessage, isListRequest } from "../format";
 import { addToWindow, closeWindow, currentWindow, looksLikeQuestion, noteBotLine, updateQuestions } from "./window";
 import { formatReview, formatSummary, HELP_TEXT, isHelpRequest, isReviewRequest, isSummaryRequest, startOfTodayUk } from "../info";
-import { matchShopName, parseAddShop, parseDone, parseReplace, parseSynonyms, parseTanglishMeans } from "../commands";
+import { matchShopName, parseAddShop, parseDone, parseReplace, parseShopDone, parseSynonyms, parseTanglishMeans } from "../commands";
 import { planReplace, type ReplaceItem } from "../replace";
 import type { Bot, BotItem, IncomingMessage, Preference, QuestionInput, SynonymPairInput } from "./ports";
 import { handleOnboarding, maybeStartOnboarding, setupQuestionText } from "./onboarding";
@@ -185,6 +185,16 @@ async function handleText(bot: Bot, m: IncomingMessage): Promise<void> {
   if (answer && (await handleAnswer(bot, answer, sender, m.quotedId))) return;
   const done = parseDone(english);
   if (done) return handleDone(bot, done.shop, m.quotedId, sender);
+  // "Waitrose done": the same, with the shop first (only when it really names one of the shops).
+  const shopFirst = parseShopDone(english);
+  if (shopFirst && matchShopName(shopFirst, await bot.store.shops()).kind !== "none") {
+    return handleDone(bot, shopFirst, m.quotedId, sender);
+  }
+  // "milk done", "eggs and bread done": those items were bought.
+  if (shopFirst && !looksLikeQuestion(english)) {
+    bot.log(`"${shopFirst} done": read as bought`);
+    return handleText(bot, { ...m, text: `got ${shopFirst}` });
+  }
 
   // "no thanks", "nope, all good": a reply to someone, never an item.
   if (!listActions && CHAT_REPLY.test(english.trim())) {
