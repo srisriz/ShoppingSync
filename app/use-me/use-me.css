@@ -247,3 +247,7 @@
   .um-cmd-group h3 { border-top-color: var(--turmeric); }
   .um-say { background: #24453a; color: #e6efe8; }
 }
+
+/* Demo video */
+.um-video { display: block; width: 100%; max-width: 880px; height: auto; aspect-ratio: 16 / 9; margin-top: 20px;
+  border-radius: 16px; border: 1px solid var(--rule); background: var(--leaf-ink); }

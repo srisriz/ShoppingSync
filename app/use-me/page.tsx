@@ -55,6 +55,22 @@ export default async function UseMePage({ searchParams }: { searchParams: Promis
       </header>
 
       <main>
+        <section className="um-section um-wrap" id="video">
+          <h2>See it in 20 seconds</h2>
+          <video
+            className="um-video"
+            src="/shoppingsync-demo.mp4"
+            poster="/shoppingsync-demo-poster.jpg"
+            controls
+            playsInline
+            preload="metadata"
+            width={1920}
+            height={1080}
+          >
+            Your browser can&apos;t play this video. <a href="/shoppingsync-demo.mp4">Download it instead</a>.
+          </video>
+        </section>
+
         <section className="um-section um-wrap">
           <h2>What it does</h2>
           <div className="um-points">
